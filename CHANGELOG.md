@@ -2,6 +2,16 @@
 
 All notable changes to **dsh-notify-me** are documented here.
 
+## [1.3.1] — 2026-10-03
+
+### 文档
+- README 中英补齐 1.1.7 / 1.1.8 起就有、但一直没写进文档的两个设置项：「当前对话不弹通知」（`currentHiddenOnly`）与「点击通知回到对应对话」（`autoFocus`），控制台配置示例同步补 `currentHiddenOnly`；「提醒时机」表的默认口径改为「页面可见也提醒（当前对话除外：默认只留标题标记）」——原表述把当前对话的静默规则漏掉了。
+- 措辞去掉 Windows 专属口径：系统通知按「经浏览器弹出，进 Windows 通知中心或 macOS 通知中心」描述，权限提示补 macOS 的 系统设置 → 通知；已知限制新增 macOS 一条——浏览器路径无平台假设，但 DSH Desktop（Electron）的系统通知要求应用已签名（官方 macOS 版是否满足未实测），审批按钮在 macOS 与桌面宿主上的渲染同样未实测，不渲染时自动退回无按钮通知。
+- 已知限制补「当前对话不弹通知」按 `document.hidden` 判定的边界（窗口被别的应用完全盖住仍算可见）；开发自检一节补 `cordis-host-test.mjs` 的 cordis 探测路径（含 `~/.dsh/profiles/node_modules` 平铺回退目录）。
+
+### 变更
+- 版本号 1.3.0 → 1.3.1；`window.__dshNotifyMe.version` 同步。功能零改动。
+
 ## [1.3.0] — 2026-10-03
 
 ### 新增
