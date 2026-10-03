@@ -15,6 +15,8 @@
 //               the list snapshot also stops carrying `current`, so the
 //               on-screen session is the row with retainedBy.mainView > 0.
 // The reply-finished channel (running/completed) is host-independent.
+// subagentSessions() covers the background-subagent mute and its one exception —
+// the subagent session the user has open (1.4.0).
 // quickActionsHost() additionally runs the bundle's Service Worker half in a
 // worker-shaped context and drives a toast button press end to end (approval
 // quick decisions, 1.3.0+).
@@ -1035,18 +1037,21 @@ async function quickActionsHost() {
   }));
 }
 
-// ────────── subagent sessions stay quiet by default (1.4.0) ──────────
+// ────────── background subagent sessions stay quiet (1.4.0) ──────────
 // DSH lists every subagent's child session as an ordinary row (origin:
 // 'subagent', parentId: <parent>), so a watcher that walks the whole list
 // alerts for a step of a conversation the user never started. The mute keys on
-// that origin field alone: a forked session (parentId set, no origin) is still
-// the user's own conversation and keeps alerting.
+// that origin field plus "not the session on screen": the subagent session the
+// user has open is just another conversation and alerts by the normal rules,
+// while a forked session (parentId set, no origin) is the user's own
+// conversation throughout and keeps alerting.
 async function subagentSessions() {
-  console.log('\n— subagent sessions (origin: "subagent") are muted by default —');
+  console.log('\n— background subagent sessions (origin: "subagent") are muted, the open one alerts —');
   const b = bootBundle();
   const host = buildHost({ withSessionStatus: true, withWorkspace: true });
   const { mod, win, doc, events, getTitle } = b;
   const cur = { running: false, displayTitle: '当前会话', retainedBy: { mainView: 1 } };
+  const curRun = { running: true, displayTitle: '当前会话', retainedBy: { mainView: 1 } };
   const bg = (title, extra) => Object.assign({ running: true, displayTitle: title, retainedBy: {} }, extra || {});
   const child = (title, extra) => bg(title, Object.assign({ origin: 'subagent', parentId: 's1' }, extra || {}));
   const fork = (title) => bg(title, { parentId: 's1' });
@@ -1056,7 +1061,8 @@ async function subagentSessions() {
   assert(win.__dshNotifyMe.config.ignoreSubagent === true, 'ignoreSubagent defaults to true');
   assert(win.__dshNotifyMe.debug().ignoreSubagent === true, 'debug() reports ignoreSubagent');
 
-  // 1) a subagent finishing raises nothing; a normal background session still does
+  // 1) a background subagent finishing raises nothing; a normal background
+  //    session still does
   doc.hidden = true; doc.visibilityState = 'hidden';
   host.setList({ ids: ['s1', 'sub1', 's2'], byId: { s1: cur, sub1: child('子代理：探索'), s2: bg('后台任务') }, phase: 'ready' });
   host.notifyList();
@@ -1067,7 +1073,7 @@ async function subagentSessions() {
   assert(done.length === 1, 'only the normal session reports "reply finished", got ' + JSON.stringify(done));
   assert(done[0].body === '后台任务', 'the surviving alert is the normal session, got ' + JSON.stringify(done[0].body));
 
-  // 2) a subagent's wait never alerts and never marks the tab
+  // 2) a background subagent's wait never alerts and never marks the tab
   events.length = 0;
   host.setList({ ids: ['s1', 'sub1'], byId: { s1: cur, sub1: child('子代理：探索') }, phase: 'ready' });
   host.notifyList();
@@ -1079,6 +1085,8 @@ async function subagentSessions() {
 
   // 3) a forked session (parentId, no origin) is still the user's own conversation
   events.length = 0;
+  host.setStatus(new Map([['sub1', statusRow(null)]])); // the subagent wait is answered
+  host.notifyStatus();
   host.setList({ ids: ['s1', 'fork1'], byId: { s1: cur, fork1: fork('分支会话') }, phase: 'ready' });
   host.notifyList();
   host.setStatus(new Map([['fork1', statusRow(question('question:302', { sessionId: 'fork1' }))]]));
@@ -1105,6 +1113,98 @@ async function subagentSessions() {
   const unmuted = events.filter((e) => e.kind === 'done');
   assert(unmuted.length === 1 && unmuted[0].body === '子代理：探索',
     'un-muting restores the subagent "reply finished" alert, got ' + JSON.stringify(unmuted));
+
+  // 5) the subagent session the user has open is not background at all: it
+  //    alerts like any other conversation (wait + "reply finished")
+  win.__dshNotifyMe.setConfig({ ignoreSubagent: true });
+  host.setStatus(new Map([['sub1', statusRow(null)]]));
+  host.notifyStatus();
+  await sleep(350);
+  events.length = 0;
+  host.setList({
+    ids: ['s1', 'sub1'],
+    byId: { s1: bg('后台任务'), sub1: child('子代理：正在看', { retainedBy: { mainView: 1 } }) },
+    phase: 'ready',
+  });
+  host.notifyList();
+  assert(win.__dshNotifyMe.debug().currentSession === 'sub1',
+    'the open subagent session is the current one, got ' + win.__dshNotifyMe.debug().currentSession);
+  host.setStatus(new Map([['sub1', statusRow(question('question:304', { sessionId: 'sub1' }))]]));
+  host.notifyStatus();
+  const openAtt = events.filter((e) => e.kind === 'attention');
+  assert(openAtt.length === 1, 'the open subagent session alerts, got ' + JSON.stringify(openAtt));
+  assert(openAtt[0].body.indexOf('子代理：正在看') !== -1,
+    'the alert carries the open session title, got ' + openAtt[0].body);
+  assert(getTitle().indexOf('需要你') !== -1, 'the open subagent wait marks the tab');
+  // ...and so does its "reply finished" edge (same-tick answering rule aside)
+  await sleep(350);
+  events.length = 0;
+  host.setStatus(new Map([['sub1', statusRow(null)]]));
+  host.notifyStatus();
+  host.setFace({ sessionId: 'sub1', running: true, nodes: [], pending: [] });
+  host.notifyFace();
+  host.setFace({ sessionId: 'sub1', running: false, nodes: [], pending: [] });
+  host.notifyFace();
+  const openDone = events.filter((e) => e.kind === 'done');
+  assert(openDone.length === 1 && openDone[0].sessionId === 'sub1',
+    'the open subagent session reports "reply finished", got ' + JSON.stringify(openDone));
+
+  // 6) a wait raised while the subagent session sat in the background is
+  //    delivered once the user opens it — under the normal current-conversation
+  //    rules (queued while the page is visible, delivered on background)
+  await sleep(350);
+  doc.hidden = false; doc.visibilityState = 'visible';
+  events.length = 0;
+  host.setFace({ sessionId: 's1', running: true, nodes: [], pending: [] });
+  host.setList({ ids: ['s1', 'sub1'], byId: { s1: curRun, sub1: child('子代理：探索') }, phase: 'ready' });
+  host.notifyList();
+  host.setStatus(new Map([['sub1', statusRow(question('question:305', { sessionId: 'sub1' }))]]));
+  host.notifyStatus();
+  assert(events.length === 0, 'a background subagent wait stays muted, got ' + JSON.stringify(events));
+  assert(getTitle().indexOf('需要你') === -1, 'a muted wait leaves no title mark');
+  host.setFace({ sessionId: 'sub1', running: true, nodes: [], pending: [] });
+  host.setList({
+    ids: ['s1', 'sub1'],
+    byId: { s1: bg('后台任务'), sub1: child('子代理：探索', { retainedBy: { mainView: 1 } }) },
+    phase: 'ready',
+  });
+  host.notifyList();
+  assert(events.filter((e) => e.kind === 'attention').length === 0,
+    'opening it stays quiet while the page is visible, got ' + JSON.stringify(events));
+  assert(getTitle().indexOf('需要你') !== -1, 'opening the session marks the tab');
+  assert(win.__dshNotifyMe.debug().quietedKeys.indexOf('question:305') !== -1,
+    'the outstanding wait is queued like any current-conversation wait');
+  doc.hidden = true; doc.visibilityState = 'hidden';
+  b.fireVisibility();
+  const opened = events.filter((e) => e.kind === 'attention');
+  assert(opened.length === 1 && opened[0].body.indexOf('子代理：探索') !== -1,
+    'the queued wait is delivered on background, got ' + JSON.stringify(opened));
+
+  // 7) leaving the subagent session puts its wait back in the muted bucket:
+  //    the title mark goes and the queued copy dies with it
+  doc.hidden = false; doc.visibilityState = 'visible';
+  events.length = 0;
+  host.setFace({ sessionId: 'sub1', running: true, nodes: [], pending: [] });
+  host.setList({
+    ids: ['s1', 'sub1'],
+    byId: { s1: bg('后台任务'), sub1: child('子代理：探索', { retainedBy: { mainView: 1 } }) },
+    phase: 'ready',
+  });
+  host.notifyList();
+  host.setStatus(new Map([['sub1', statusRow(question('question:306', { sessionId: 'sub1' }))]]));
+  host.notifyStatus();
+  assert(win.__dshNotifyMe.debug().quietedKeys.indexOf('question:306') !== -1,
+    'the open session’s wait queues while the page is visible');
+  host.setFace({ sessionId: 's1', running: true, nodes: [], pending: [] });
+  host.setList({ ids: ['s1', 'sub1'], byId: { s1: curRun, sub1: child('子代理：探索') }, phase: 'ready' });
+  host.notifyList();
+  assert(events.length === 0, 'switching away raises nothing, got ' + JSON.stringify(events));
+  assert(getTitle().indexOf('需要你') === -1, 'the muted wait leaves no title mark');
+  assert(win.__dshNotifyMe.debug().quietedKeys.length === 0,
+    'its queued copy dies with the mute');
+  doc.hidden = true; doc.visibilityState = 'hidden';
+  b.fireVisibility();
+  assert(events.length === 0, 'the dead queued copy is never delivered');
 
   for (const c of [...host.cleanups]) c();
 }

@@ -45,7 +45,7 @@ dsh-notify-me decouples **supervision** from **sitting in front of the screen**:
 | 🔔 **The agent needs your input** — sandbox approval / plan review / a question (`ask_user_question`) | Toast + sound + `🔔 Action needed ·` title marker; approval toasts also carry Approve / Reject buttons | Alerts even while the page is visible (the conversation on screen is the exception: tab marker only by default) |
 | ✅ **A reply finishes** — a turn completes; background sessions finishing are also reported | Toast + sound | Alerts only while the page is hidden / backgrounded |
 
-> Subagent child sessions are **not** alerted about by default: DSH lists each of them as its own session, but they are steps inside the parent conversation's turn, so an alert for them is only noise. Settings → "Ignore subagent sessions" turns the mute off.
+> **Background** subagent child sessions are **not** alerted about by default: DSH lists each of them as its own session, but they are steps inside the parent conversation's turn, so an alert for them is only noise. The subagent session you have open is not part of this and alerts as usual. Settings → "Ignore subagent sessions" turns the mute off.
 
 ## Configure it from DSH Settings
 
@@ -55,7 +55,7 @@ Open **Settings → Notify me** (refresh the page once after installing):
 - **System notifications / Sound / Volume** — toast toggle, WebAudio beep toggle and a volume slider;
 - **"Needs you" alerts while the page is open** (default on) and **"Reply finished" alerts while the page is open** (default off);
 - **Stay quiet for the conversation on screen** (default on): a wait inside the conversation you are looking at keeps only the tab marker — no toast or sound landing on the approval card. Backgrounding the page puts that alert back at once, unless you already handled it. Waits in other background sessions are unaffected;
-- **Ignore subagent sessions** (default on): a subagent child session raises neither "needs you" nor "reply finished" — those are steps of the parent conversation's turn, and the parent's own alert already covers them. Turn it off to alert for every session;
+- **Ignore subagent sessions** (default on): background subagent child sessions raise neither "needs you" nor "reply finished" — those are steps of the parent conversation's turn, and the parent's own alert already covers them. The subagent session you have open alerts as usual. Turn it off to alert for every session;
 - **Click a toast to open that conversation** (default on): clicking brings DSH to the front and switches to the conversation the alert came from; when off, clicking a toast does nothing;
 - **Decide approvals from the toast** (default on): approval notifications carry Approve / Reject buttons, and one click settles the request exactly like the Allow once / Reject buttons on the approval card. Clicking the toast body still takes you back to the conversation;
 - **Notification language** — follow the interface / 简体中文 / English: controls the language of the alert text and the `🔔 …` title marker;
@@ -119,7 +119,7 @@ window.__dshNotifyMe.setConfig({
   attentionHiddenOnly: false, // true = don't alert "needs you" while the page is visible
   currentHiddenOnly: true,    // true = waits in the conversation on screen keep only the tab marker (replayed once backgrounded)
   doneHiddenOnly: true,       // false = also alert "reply finished" while visible
-  ignoreSubagent: true,       // true = never alert for subagent child sessions
+  ignoreSubagent: true,       // true = never alert for background subagent sessions (the open one is exempt)
   toast: true,                // system-notification toggle
   sound: true,                // sound toggle
   volume: 0.5,                // 0..1
@@ -137,7 +137,7 @@ The reminder core picks its interaction source per host generation (see the tabl
 - the **selected session's** `SessionSnapshot`: a `running: true → false` edge means a reply finished;
 - **pending interactions**: a new key in `uiSession.sessionStatus` (`>= 0.1.6`, per-session `pendingInteraction`) or in `pendingInteractions` (`0.1.2 .. 0.1.5`) means the agent is waiting on you — approval requests carry the tool name and reason, questions their text; older hosts fall back to the controller snapshot's `pending[]`;
 - **every other listed session's** summary: a `running: true → false` edge (or the legacy `completed` flag) alerts you about background work;
-- **subagent sessions**: rows carrying `origin: 'subagent'` (and a `parentId`) stay muted by default; a fork has a `parentId` but no `origin`, is your own conversation, and keeps alerting.
+- **subagent sessions**: **background** rows carrying `origin: 'subagent'` (and a `parentId`) stay muted by default. The subagent session you have open is exempt — its alerts follow the normal current-conversation rules (tab marker only while the page is visible, delivered on background), its outstanding waits are picked up when you switch into it, and switching away mutes them again. A fork has a `parentId` but no `origin`, is your own conversation, and keeps alerting throughout.
 
 The reminder core stays dependency-free and self-contained: notification copy resolves at alert time from the chosen language (follow-interface / Simplified Chinese / English). The Settings page is an **optional** React surface — it only registers into Settings when the web profile provides the `slots` / `locale` services and `react`; without them the plugin degrades gracefully to alerts-only (no Settings page).
 
@@ -177,7 +177,7 @@ npm pack --dry-run               # preview the published tarball
 Contributors (by handle; the linked PR is their change):
 
 - [@AgMahone](https://github.com/AgMahone) — [#7](https://github.com/chromoany/dsh-notify-me/pull/7): the 0.1.6+ / 0.2.0 host-generation support, plus the double-chime and cordis-lookup reports and retesting;
-- [@d0ublecl1ck](https://github.com/d0ublecl1ck) — [#8](https://github.com/chromoany/dsh-notify-me/pull/8): muting subagent sessions (`ignoreSubagent`) with its tests and docs.
+- [@d0ublecl1ck](https://github.com/d0ublecl1ck) — [#8](https://github.com/chromoany/dsh-notify-me/pull/8): muting subagent sessions (`ignoreSubagent`) with its tests and docs; the 1.4.0 refinement — mute only background subagents, alert as usual for the one you have open — is his suggestion from the #8 discussion, landed by the maintainer.
 
 Attribution policy: external PRs are landed as maintainer commits — the original commit is not reused and no Co-authored-by trailer is added, so GitHub's contributors graph lists the maintainer only and contributors are credited above.
 
