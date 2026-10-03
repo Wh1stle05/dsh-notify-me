@@ -14,7 +14,11 @@
 //               (a Map<sessionId, {running, pendingInteraction, completionUnread}>);
 //               the list snapshot also stops carrying `current`, so the
 //               on-screen session is the row with retainedBy.mainView > 0.
-// The reply-finished channel (running/completed) is host-independent.
+// The reply-finished channel (running/completed) is host-independent;
+// completionUnreadChannel() covers its 0.1.6+ level flag (sessionStatus rows'
+// `completionUnread`, 1.5.0): one report per unread instance, the "完成未读"
+// title marker, and the dedupe against the running edge when both views of one
+// completion arrive.
 // subagentSessions() covers the background-subagent mute and its one exception —
 // the subagent session the user has open (1.4.0).
 // quickActionsHost() additionally runs the bundle's Service Worker half in a
@@ -265,6 +269,7 @@ async function legacyHost() {
   host.setList({ ids: ['bg1'], byId: { bg1: { running: false, displayTitle: '后台任务', completed: true } }, current: 's1', phase: 'ready' });
   host.notifyList();
   assert(events.filter((e) => e.kind === 'done').length === 1, 'background session completion alerted');
+  assert(getTitle().indexOf('✅') !== -1, 'the row.completed reminder bit marks the tab');
 
   // 5) doneHiddenOnly default suppresses "done" while the page is visible
   events.length = 0;
@@ -272,6 +277,7 @@ async function legacyHost() {
   await sleep(400);
   host.setList({ ids: ['bg1'], byId: { bg1: { running: true, displayTitle: 'x', completed: false } }, current: 's1', phase: 'ready' });
   host.notifyList();
+  assert(getTitle().indexOf('✅') === -1, 're-running the session releases the unread mark');
   host.setList({ ids: ['bg1'], byId: { bg1: { running: false, displayTitle: 'x', completed: true } }, current: 's1', phase: 'ready' });
   host.notifyList();
   assert(events.length === 0, 'done suppressed while page visible (doneHiddenOnly default)');
@@ -340,6 +346,15 @@ async function legacyHost() {
   win.__dshNotifyMe.test('attention');
   assert(events.filter((e) => e.kind === 'attention').length === 1, 'test "attention" fires while page visible');
   assert(getTitle().indexOf('需要你') !== -1, 'attention test sets the marker');
+
+  // 11) the unread mark dies with the reminder bit the host drops on select
+  //     (its completedNotifications are cleared the moment a session opens)
+  host.setList({ ids: ['bg1'], byId: { bg1: { running: false, displayTitle: '后台任务', completed: true } }, current: 's1', phase: 'ready' });
+  host.notifyList();
+  assert(getTitle().indexOf('✅') !== -1, 'the finished row still holds the unread mark');
+  host.setList({ ids: ['bg1'], byId: { bg1: { running: false, displayTitle: '后台任务', completed: true, retainedBy: { mainView: 1 } } }, phase: 'ready' });
+  host.notifyList();
+  assert(getTitle().indexOf('✅') === -1, 'selecting the session releases the mark');
 
   // cleanup must unsubscribe
   for (const c of [...host.cleanups]) c();
@@ -756,6 +771,200 @@ async function modernHost() {
   for (const c of [...host.cleanups]) c();
   assert(host.listeners.status.length === 0, 'sessionStatus unsubscribed after dispose');
   assert(host.listeners.face.length === 0, 'face unsubscribed after dispose');
+}
+
+// ────────── completion-unread level flag (0.1.6+, 1.5.0) ──────────
+// sessionStatus rows carry {running, pendingInteraction, completionUnread}:
+// the flag lights when a background session finishes and clears when the
+// session is opened / re-runs / disappears. It owns the "✅ 回复完成" title
+// marker and reports completions whose running edge this page never saw
+// (coalesced snapshots, a remount mid-turn, a completion predating the bind);
+// reportDone's short window collapses the double view when both arrive.
+async function completionUnreadChannel() {
+  console.log('\n— completionUnread: finished-but-unread channel + tab marker —');
+  const b = bootBundle();
+  const host = buildHost({ withSessionStatus: true, withWorkspace: true });
+  const { mod, win, doc, events, getTitle } = b;
+  const cur = { running: false, displayTitle: '当前会话', retainedBy: { mainView: 1 } };
+  const bg = (title, extra) => Object.assign({ running: false, displayTitle: title, retainedBy: {} }, extra || {});
+
+  mod.apply(host.ctx);
+  win.__dshNotifyMe.onEvent = (kind, payload) => events.push({ kind, ...payload });
+  host.setList({ ids: ['s1', 's2'], byId: { s1: cur, s2: bg('后台任务') }, phase: 'ready' });
+  host.notifyList();
+  doc.hidden = true; doc.visibilityState = 'hidden';
+
+  // 1) a completion whose running edge never reached this page: the level flag
+  //    reports it once and marks the tab
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['s2', statusRow(null, { running: false, completionUnread: true })],
+  ]));
+  host.notifyStatus();
+  let done = events.filter((e) => e.kind === 'done');
+  assert(done.length === 1, 'completionUnread reports a completion the edge never saw, got ' + JSON.stringify(done));
+  assert(done[0].body === '后台任务', 'the report carries the session title, got ' + JSON.stringify(done[0].body));
+  assert(getTitle().indexOf('✅') !== -1, 'the unread completion marks the tab');
+  assert(win.__dshNotifyMe.debug().doneUnreadMarked.indexOf('s2') !== -1, 'debug() reports the unread mark');
+
+  // 2) the latch: the same unread never re-alerts; opening the session (the
+  //    host clears the flag) releases the mark
+  events.length = 0;
+  host.notifyStatus();
+  host.notifyStatus();
+  assert(events.length === 0, 'a republished unread does not re-alert');
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['s2', statusRow(null, { running: false, completionUnread: false })],
+  ]));
+  host.notifyStatus();
+  assert(getTitle().indexOf('✅') === -1, 'opening the session releases the unread mark');
+
+  // 3) both views of one completion (running edge + level flag) in one tick
+  //    collapse into a single alert
+  await sleep(400);
+  host.setList({ ids: ['s1', 's2'], byId: { s1: cur, s2: bg('后台任务', { running: true }) }, phase: 'ready' });
+  host.notifyList();
+  events.length = 0;
+  host.setList({ ids: ['s1', 's2'], byId: { s1: cur, s2: bg('后台任务', { running: false }) }, phase: 'ready' });
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['s2', statusRow(null, { running: false, completionUnread: true })],
+  ]));
+  host.notifyList();
+  host.notifyStatus();
+  done = events.filter((e) => e.kind === 'done');
+  assert(done.length === 1, 'the edge and the level flag of one completion alert once, got ' + JSON.stringify(done));
+
+  // 4) a pre-existing unread at bind reports once (remount mid-completion)
+  const late = bootBundle();
+  const lateHost = buildHost({ withSessionStatus: true, withWorkspace: true });
+  lateHost.setList({ ids: ['s1', 's2'], byId: { s1: cur, s2: bg('后台任务') }, phase: 'ready' });
+  lateHost.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['s2', statusRow(null, { running: false, completionUnread: true })],
+  ]));
+  late.doc.hidden = true; late.doc.visibilityState = 'hidden';
+  late.mod.apply(lateHost.ctx); // reports synchronously for the pre-existing unread
+  const seeded = late.events.filter((e) => e.kind === 'done');
+  assert(seeded.length === 1, 'a pre-existing unread alerts once on bind, got ' + seeded.length);
+  assert(late.getTitle().indexOf('✅') !== -1, 'the pre-existing unread marks the tab');
+  late.events.length = 0;
+  lateHost.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['s2', statusRow(null, { running: false, completionUnread: false })],
+  ]));
+  lateHost.notifyStatus();
+  assert(late.getTitle().indexOf('✅') === -1, 'the pre-existing unread releases its mark');
+  for (const c of [...lateHost.cleanups]) c();
+
+  // 5) a stop that awaits input is a wait, not a completion: no done, no mark,
+  //    and answering the wait does not raise the toast after the fact (the
+  //    attention alert owned the moment) — the mark still carries the host's
+  //    unread fact until the session is opened
+  events.length = 0;
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['s2', statusRow(question('question:410', { sessionId: 's2' }), { running: false, completionUnread: true })],
+  ]));
+  host.notifyStatus();
+  assert(events.filter((e) => e.kind === 'done').length === 0,
+    'a stop awaiting input raises no "reply finished"');
+  assert(events.filter((e) => e.kind === 'attention').length === 1, 'the wait itself alerts');
+  assert(getTitle().indexOf('✅') === -1, 'no unread mark while the wait is pending');
+  events.length = 0;
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['s2', statusRow(null, { running: false, completionUnread: true })],
+  ]));
+  host.notifyStatus();
+  await sleep(350); // outside the attention->done same-tick guard
+  host.notifyStatus();
+  assert(events.filter((e) => e.kind === 'done').length === 0,
+    'answering the wait raises no late "reply finished", got ' + JSON.stringify(events));
+  assert(getTitle().indexOf('✅') !== -1, 'the host’s unread fact still marks the tab');
+
+  // 6) both marker kinds can be up together ("needs you" leads), and a host
+  //    title change underneath survives the rebase
+  events.length = 0;
+  host.setList({ ids: ['s1', 's2', 's3'], byId: { s1: cur, s2: bg('后台任务'), s3: bg('第三个会话') }, phase: 'ready' });
+  host.notifyList();
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['s2', statusRow(null, { running: false, completionUnread: true })],
+    ['s3', statusRow(question('question:411', { sessionId: 's3' }), { running: true })],
+  ]));
+  host.notifyStatus();
+  assert(getTitle().indexOf('需要你') !== -1 && getTitle().indexOf('✅') !== -1,
+    'attention and unread marks stack, got ' + getTitle());
+  assert(getTitle().indexOf('需要你') < getTitle().indexOf('✅'), 'the needs-you mark leads');
+  b.doc.title = '会话 B — DeepSeek Harness'; // the host retitlees under the marks
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['s2', statusRow(null, { running: false, completionUnread: false })],
+    ['s3', statusRow(null, { running: true })],
+  ]));
+  host.notifyStatus();
+  assert(getTitle() === '会话 B — DeepSeek Harness',
+    'markers released -> the host title is restored exactly, got ' + getTitle());
+  await sleep(350); // outside the attention->done same-tick guard
+
+  // 7) the on-screen session is never "unread" (its completion is the face
+  //    edge's job), and a background subagent step stays muted until un-muted
+  events.length = 0;
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false, completionUnread: true })], // s1 is current
+  ]));
+  host.notifyStatus();
+  assert(events.length === 0 && getTitle().indexOf('✅') === -1,
+    'the on-screen session raises nothing from the unread flag');
+  host.setList({ ids: ['s1', 'sub1'], byId: { s1: cur, sub1: bg('子代理：探索', { origin: 'subagent', parentId: 's1' }) }, phase: 'ready' });
+  host.notifyList();
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['sub1', statusRow(null, { running: false, completionUnread: true })],
+  ]));
+  host.notifyStatus();
+  assert(events.length === 0 && getTitle().indexOf('✅') === -1,
+    'a background subagent completion is muted like its waits');
+  win.__dshNotifyMe.setConfig({ ignoreSubagent: false });
+  host.notifyStatus();
+  done = events.filter((e) => e.kind === 'done');
+  assert(done.length === 1 && done[0].body === '子代理：探索',
+    'un-muting reports the outstanding completion once, got ' + JSON.stringify(done));
+  assert(getTitle().indexOf('✅') !== -1, 'the un-muted completion marks the tab');
+  win.__dshNotifyMe.setConfig({ ignoreSubagent: true });
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['sub1', statusRow(null, { running: false, completionUnread: false })],
+  ]));
+  host.notifyStatus();
+  assert(getTitle().indexOf('✅') === -1, 're-muting clears the mark');
+
+  // 8) doneHiddenOnly suppresses the toast while the page is visible but the
+  //    mark still carries the unread fact (the "come back and see" case)
+  events.length = 0;
+  doc.hidden = false; doc.visibilityState = 'visible';
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['s2', statusRow(null, { running: false, completionUnread: true })],
+  ]));
+  host.notifyStatus();
+  assert(events.length === 0, 'the toast waits for the page to hide (doneHiddenOnly default)');
+  assert(getTitle().indexOf('✅') !== -1, 'the mark is up while the page is open');
+  doc.hidden = true; doc.visibilityState = 'hidden';
+  b.fireVisibility();
+  assert(events.filter((e) => e.kind === 'done').length === 0,
+    '"done" has no deferred copy — the mark is the reminder');
+  host.setStatus(new Map([
+    ['s1', statusRow(null, { running: false })],
+    ['s2', statusRow(null, { running: false, completionUnread: false })],
+  ]));
+  host.notifyStatus();
+  assert(getTitle().indexOf('✅') === -1, 'reading the session clears the mark');
+
+  for (const c of [...host.cleanups]) c();
+  assert(host.listeners.status.length === 0, 'sessionStatus unsubscribed after dispose');
 }
 
 // ─────────────── approval quick-decision bridge (1.3.0) ───────────────
@@ -1214,6 +1423,7 @@ async function subagentSessions() {
   await currentHost();
   await modernHost();
   await subagentSessions();
+  await completionUnreadChannel();
   await quickActionsHost();
   console.log('\nALL SMOKE TESTS PASSED ✔');
   // Exit explicitly: marker-release timers stay armed on purpose (they mirror

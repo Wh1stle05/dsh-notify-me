@@ -448,6 +448,45 @@ async function main() {
     console.log('quick decision via decide() OK:', JSON.stringify(appr2.decisions));
     h.uiService.publish(new Map([['s1', { running: true, pendingInteraction: null, completionUnread: false }]]));
     await tick();
+
+    // completion-unread level flag (1.5.0): through the real store, a
+    // background session's finished-but-unread state reports once and holds
+    // the "✅ 回复完成" mark until the session is opened.
+    await sleep(350); // outside the attention->done same-tick guard
+    h.doc.hidden = true; h.doc.visibilityState = 'hidden';
+    h.controller.setList({
+      ids: ['s1', 's2'], byId: {
+        s1: { running: false, displayTitle: '当前会话', retainedBy: { mainView: 1 } },
+        s2: { running: false, displayTitle: '后台任务', retainedBy: {} },
+      }, phase: 'ready',
+    });
+    h.controller.notifyList();
+    await tick();
+    h.events.length = 0;
+    h.uiService.publish(new Map([
+      ['s1', { running: false, pendingInteraction: null, completionUnread: false }],
+      ['s2', { running: false, pendingInteraction: null, completionUnread: true }],
+    ]));
+    await tick();
+    const doneUnread = h.events.filter((e) => e.kind === 'done');
+    assert(doneUnread.length === 1,
+      'completionUnread must report the finished background session once (got ' + doneUnread.length + ')');
+    assert(h.getTitle().indexOf('✅') !== -1, 'the unread completion marks the tab');
+    console.log('completionUnread report + marker OK:', JSON.stringify(doneUnread[0]));
+    h.events.length = 0;
+    h.uiService.publish(new Map([
+      ['s1', { running: false, pendingInteraction: null, completionUnread: false }],
+      ['s2', { running: false, pendingInteraction: null, completionUnread: true }],
+    ]));
+    await tick();
+    assert(h.events.length === 0, 'the same unread instance must not re-alert');
+    h.uiService.publish(new Map([
+      ['s1', { running: false, pendingInteraction: null, completionUnread: false }],
+      ['s2', { running: false, pendingInteraction: null, completionUnread: false }],
+    ]));
+    await tick();
+    assert(h.getTitle().indexOf('✅') === -1, 'opening the session releases the unread mark');
+    console.log('completionUnread latch + release OK');
   }
 
   console.log('\ncordis-host-test passed');

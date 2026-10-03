@@ -43,7 +43,7 @@ dsh-notify-me decouples **supervision** from **sitting in front of the screen**:
 | When | What you get | Default |
 | --- | --- | --- |
 | 🔔 **The agent needs your input** — sandbox approval / plan review / a question (`ask_user_question`) | Toast + sound + `🔔 Action needed ·` title marker; approval toasts also carry Approve / Reject buttons | Alerts even while the page is visible (the conversation on screen is the exception: tab marker only by default) |
-| ✅ **A reply finishes** — a turn completes; background sessions finishing are also reported | Toast + sound | Alerts only while the page is hidden / backgrounded |
+| ✅ **A reply finishes** — a turn completes; background sessions finishing are also reported | Toast + sound; while a background session is **finished but unread** the tab title carries a `✅ Reply finished ·` marker, gone once you open that session | Alerts only while the page is hidden / backgrounded (the title marker is not gated by this) |
 
 > **Background** subagent child sessions are **not** alerted about by default: DSH lists each of them as its own session, but they are steps inside the parent conversation's turn, so an alert for them is only noise. The subagent session you have open is not part of this and alerts as usual. Settings → "Ignore subagent sessions" turns the mute off.
 
@@ -67,7 +67,7 @@ Open **Settings → Notify me** (refresh the page once after installing):
 
 - **System notification** — a toast through the browser into the Windows action center / macOS Notification Center (clicking it opens the conversation it came from; approval toasts can be decided straight from the buttons)
 - **Sound** — WebAudio beeps (distinct patterns for "needs you" vs "done")
-- **Tab title marker** — while something is waiting on you, the tab title is prefixed with `🔔 Action needed · …` / `🔔 需要你 · …`
+- **Tab title marker** — while something is waiting on you, the tab title is prefixed with `🔔 Action needed · …` / `🔔 需要你 · …`; while a background session is **finished but unread**, with `✅ Reply finished · …` / `✅ 回复完成 · …`, gone once you open that session (or it starts running again). Both kinds can be up together, "needs you" first; a host title change is rebased under the markers
 
 This is a **browser-layer** plugin: the DSH page must stay open (minimized or backgrounded is fine — that's exactly the "away" state it watches for).
 
@@ -88,7 +88,7 @@ Restart `dsh web`, then hard-refresh the page (Ctrl+Shift+R).
 | `0.1.2-alpha.2 .. 0.1.6-alpha.1` | `uiSession.pendingInteractions` | snapshot `current` | `sessions.open()` |
 | `>= 0.1.6-alpha.2` (incl. `0.2.0-rc.2`) | `uiSession.sessionStatus` | `retainedBy.mainView` | `uiWorkspace.openSession()` |
 
-The ranges are illustrative: the plugin picks its source by store shape (whenever `sessionStatus` exists it takes the new path); the version numbers only mark where each shape appeared.
+The ranges are illustrative: the plugin picks its source by store shape (whenever `sessionStatus` exists it takes the new path); the version numbers only mark where each shape appeared. The `peerDependencies` range in `package.json` likewise only shapes npm's install warning — compatibility is declared per release in `dshReleases` after real testing, and untested new versions fall back to shape-driven behaviour.
 
 Verified to actually activate on `0.1.2-rc.1`, `0.1.5-rc.2` and `0.2.0-rc.2` (each booted in its own profile: the Settings → Notifications section registers, i.e. the plugin's `apply` really runs), and previously on `0.1.1-rc.2`. Two traps are worth remembering: a package listed in `dsh.client.inject` that a newer runtime no longer ships parks the client entry at `pending (waiting for services: …)` forever — which is what broke 1.1.3 on `0.1.2-rc.1` and later; and when the host renames a store or a field nothing throws, alerts just go **silent** — `0.2.0-rc.2` moved `pendingInteractions`→`sessionStatus`, `list.current`→`retainedBy.mainView` and `sessions.open()`→`uiWorkspace.openSession()`. So every adaptation must confirm `window.__dshNotifyMe.debug()` reports `bound` and which source answered.
 
@@ -136,7 +136,7 @@ The reminder core picks its interaction source per host generation (see the tabl
 
 - the **selected session's** `SessionSnapshot`: a `running: true → false` edge means a reply finished;
 - **pending interactions**: a new key in `uiSession.sessionStatus` (`>= 0.1.6`, per-session `pendingInteraction`) or in `pendingInteractions` (`0.1.2 .. 0.1.5`) means the agent is waiting on you — approval requests carry the tool name and reason, questions their text; older hosts fall back to the controller snapshot's `pending[]`;
-- **every other listed session's** summary: a `running: true → false` edge (or the legacy `completed` flag) alerts you about background work;
+- **every other listed session's** summary: a `running: true → false` edge (or the legacy `completed` flag) alerts you about background work. The host's completion-unread level flag backs that edge up and owns the title marker: `sessionStatus` rows' `completionUnread` on `>= 0.1.6` (lit when a background session finishes, cleared when it is opened / re-runs / disappears), the list row's `completed` reminder bit on older hosts (cleared on select). It re-reports a completion whose edge this page never saw (a plugin remount mid-turn, coalesced snapshots) exactly once, and when both views of one completion arrive together a short window collapses them into a single alert.
 - **subagent sessions**: **background** rows carrying `origin: 'subagent'` (and a `parentId`) stay muted by default. The subagent session you have open is exempt — its alerts follow the normal current-conversation rules (tab marker only while the page is visible, delivered on background), its outstanding waits are picked up when you switch into it, and switching away mutes them again. A fork has a `parentId` but no `origin`, is your own conversation, and keeps alerting throughout.
 
 The reminder core stays dependency-free and self-contained: notification copy resolves at alert time from the chosen language (follow-interface / Simplified Chinese / English). The Settings page is an **optional** React surface — it only registers into Settings when the web profile provides the `slots` / `locale` services and `react`; without them the plugin degrades gracefully to alerts-only (no Settings page).

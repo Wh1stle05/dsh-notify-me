@@ -12,3 +12,7 @@ Thumbs.db
 
 # local scratch (never commit: draft reports, probe scripts, one-off artifacts)
 temp/
+temp-*/
+
+# local agent instructions (carry machine paths & ecosystem notes)
+AGENTS.md
