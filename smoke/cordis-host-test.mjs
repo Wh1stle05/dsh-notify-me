@@ -39,6 +39,9 @@ function findCordis() {
     process.env.DSH_NODE_MODULES,
     path.join(win, 'npm', 'node_modules'),
     path.join(home, '.dsh', 'profiles', 'web', 'node_modules'),
+    // the flat fallback directory healProfilesModuleFallback maintains —
+    // without it this suite silently skips on most machines
+    path.join(home, '.dsh', 'profiles', 'node_modules'),
   ].filter(Boolean);
   const candidates = [];
   if (process.env.DSH_CORDIS_PATH) candidates.push(process.env.DSH_CORDIS_PATH);

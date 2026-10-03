@@ -2,6 +2,14 @@
 
 All notable changes to **dsh-notify-me** are documented here.
 
+## [1.2.1] — 2026-10-03
+
+### 修复
+- **提示音叠着响两声**：`new Notification(...)` 没带 `silent: true`，平台自带通知音与插件自己的 WebAudio 提示音各响一遍。现在通知一律静音，声音统一由插件承担（attention / done 两种音型、音量设置不变）；设置页「提示音」关掉即完全安静。
+
+### 变更
+- `smoke/cordis-host-test.mjs` 借用 cordis 的探测路径补上 `~/.dsh/profiles/node_modules`（`healProfilesModuleFallback` 维护的平铺回退目录）：此前只探测 `profiles/web/node_modules`，多数机器上最强的那套真 cordis 端到端用例会静默跳过。
+
 ## [1.2.0] — 2026-09-30
 
 ### 修复
