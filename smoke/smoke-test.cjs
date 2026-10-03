@@ -996,13 +996,15 @@ function makeChannelHub() {
 // The Service Worker half: same bundle, worker-shaped environment. Returns the
 // captured notificationclick handler and the module-load counter (which must
 // stay zero — the worker half must never touch the page module table).
-function bootWorker(HubCtor) {
+// `windowClients` are the window clients clients.matchAll() should report, so
+// click-routing (which window a body click raises and steers) can be driven.
+function bootWorker(HubCtor, windowClients) {
   const handlers = {};
   let loadCalls = 0;
   const selfStub = {
     registration: { scope: '/plugins/' },
     addEventListener(type, fn) { handlers[type] = fn; },
-    clients: { matchAll: () => Promise.resolve([]) },
+    clients: { matchAll: () => Promise.resolve(windowClients || []) },
     BroadcastChannel: HubCtor,
   };
   const sandbox = {
@@ -1081,7 +1083,22 @@ async function quickActionsHost() {
       };
     },
   });
-  const w = bootWorker(HubCtor);
+  // Window clients for click routing: a client's postMessage feeds the page's
+  // service-worker message listeners exactly like a real one would, and
+  // focus() counts the window raises.
+  const mkWindowClient = (visibilityState) => ({
+    visibilityState,
+    focused: 0,
+    messages: [],
+    postMessage(m) {
+      this.messages.push(m);
+      for (const fn of swHandlers.message || []) fn({ data: m });
+    },
+    focus() { this.focused += 1; return Promise.resolve(); },
+  });
+  const clientHidden = mkWindowClient('hidden');
+  const clientVisible = mkWindowClient('visible');
+  const w = bootWorker(HubCtor, [clientHidden, clientVisible]);
   assert(w.loadCalls() === 0, 'the worker half must not touch the page module table');
 
   const host = buildHost({ withSessionStatus: true, withWorkspace: true });
@@ -1238,6 +1255,57 @@ async function quickActionsHost() {
   assert(testDec.length === 1 && testDec[0].test === true && testDec[0].outcome === 'allowed-once',
     'test button click reports a simulated decision, got ' + JSON.stringify(testDec));
   assert(events.filter((e) => e.kind === 'done').length === 1, 'test decision answers with a feedback toast');
+
+  // 11) a body click means "take me there": the worker raises exactly one DSH
+  //     window (visible first) and routes the conversation switch to it alone,
+  //     so several open tabs cannot fight over focus or all switch at once
+  b.doc.hidden = true; b.doc.visibilityState = 'hidden';
+  host.setList({ ids: ['s2'], byId: { s2: { displayTitle: '后台任务', retainedBy: {} } }, phase: 'ready' });
+  host.notifyList();
+  const answers5 = [];
+  host.setStatus(new Map([['s2', statusRow(answerableApproval('approval:220', { sessionId: 's2' }, answers5))]]));
+  host.notifyStatus();
+  note = shownFor('approval:220');
+  assert(note && note.opts.data && note.opts.data.focus === true,
+    'the toast records the autoFocus setting for the worker, got ' + JSON.stringify(note.opts.data));
+  host.opened.length = 0;
+  w.click('', note.opts.data);
+  await sleep(20);
+  assert(clientVisible.focused === 1 && clientHidden.focused === 0,
+    'a body click raises exactly the visible window, got ' + JSON.stringify([clientHidden.focused, clientVisible.focused]));
+  assert(clientVisible.messages.filter((m) => m.navigate === true).length === 1,
+    'only the chosen window is told to navigate, got ' + JSON.stringify(clientVisible.messages));
+  assert(clientHidden.messages.every((m) => m.navigate !== true),
+    'the other window stays put, got ' + JSON.stringify(clientHidden.messages));
+  assert(host.opened.length === 1 && host.opened[0] === 's2',
+    'the click switches that window to the alerted conversation, got ' + JSON.stringify(host.opened));
+  assert(answers5.length === 0, 'a body click decides nothing');
+
+  // 12) a button press stays hands-off — deciding must not drag a window up or
+  //     switch any conversation — and autoFocus off keeps the "clicking a toast
+  //     does nothing" promise on the persistent channel too
+  host.opened.length = 0;
+  w.click('approve', note.opts.data);
+  await sleep(20);
+  assert(answers5.length === 1 && answers5[0] === 'allowed-once', 'the button still settles the request');
+  assert(clientVisible.focused === 1 && clientHidden.focused === 0,
+    'deciding raises no window (both clients only got the relay), got ' + JSON.stringify([clientHidden.focused, clientVisible.focused]));
+  assert(host.opened.length === 0, 'a button press never switches conversations');
+  win.__dshNotifyMe.setConfig({ autoFocus: false });
+  const answers6 = [];
+  host.setStatus(new Map([['s2', statusRow(answerableApproval('approval:221', { sessionId: 's2' }, answers6))]]));
+  host.notifyStatus();
+  note = shownFor('approval:221');
+  assert(note && note.opts.data.focus === false, 'autoFocus off is recorded on the toast itself');
+  const focusedBefore = clientHidden.focused + clientVisible.focused;
+  host.opened.length = 0;
+  w.click('', note.opts.data);
+  await sleep(20);
+  assert(clientHidden.focused + clientVisible.focused === focusedBefore, 'no window is raised while autoFocus is off');
+  assert(host.opened.length === 0, 'no conversation switch while autoFocus is off');
+  win.__dshNotifyMe.setConfig({ autoFocus: true });
+  host.setStatus(new Map([['s2', statusRow(null)]]));
+  host.notifyStatus();
 
   for (const c of [...host.cleanups]) c();
   console.log('quick-decision bridge OK:', JSON.stringify({
