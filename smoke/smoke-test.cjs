@@ -15,6 +15,9 @@
 //               the list snapshot also stops carrying `current`, so the
 //               on-screen session is the row with retainedBy.mainView > 0.
 // The reply-finished channel (running/completed) is host-independent.
+// quickActionsHost() additionally runs the bundle's Service Worker half in a
+// worker-shaped context and drives a toast button press end to end (approval
+// quick decisions, 1.3.0+).
 'use strict';
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -86,6 +89,9 @@ function bootBundle(opts) {
     Symbol, Object, JSON, Date, Math, Array, String, Number,
   };
   vm.createContext(sandbox);
+  // Test-specific environment extras (service-worker bridge stubs, __DSH_BOOT__,
+  // a shared BroadcastChannel hub) go in before the bundle evaluates.
+  if (opts && typeof opts.extend === 'function') opts.extend(sandbox, windowStub);
   vm.runInContext(SRC, sandbox, { filename: 'client.js' });
   if (!captured.reg) throw new Error('plugin did not register via __ModuleLoader__.load');
   if (captured.reg.id !== 'dsh-notify-me') throw new Error('unexpected id ' + captured.reg.id);
@@ -750,10 +756,290 @@ async function modernHost() {
   assert(host.listeners.face.length === 0, 'face unsubscribed after dispose');
 }
 
+// ─────────────── approval quick-decision bridge (1.3.0) ───────────────
+// Action buttons only exist on persistent notifications, so the bundle is
+// dual-context: the exact same bytes also register as a Service Worker whose
+// notificationclick relays the chosen button back to the page. This section
+// runs BOTH halves — the worker half in its own worker-shaped vm context, the
+// page half in the regular one — joined by a shared BroadcastChannel hub, so a
+// toast button press is driven end to end down to the interaction's answer().
+function makeChannelHub() {
+  const instances = [];
+  return class FakeBroadcastChannel {
+    constructor(name) {
+      this.name = name;
+      this.onmessage = null;
+      this.closed = false;
+      instances.push(this);
+    }
+    postMessage(data) {
+      for (const ch of [...instances]) {
+        if (ch === this || ch.closed || ch.name !== this.name) continue;
+        queueMicrotask(() => { if (!ch.closed && typeof ch.onmessage === 'function') ch.onmessage({ data }); });
+      }
+    }
+    close() { this.closed = true; }
+  };
+}
+
+// The Service Worker half: same bundle, worker-shaped environment. Returns the
+// captured notificationclick handler and the module-load counter (which must
+// stay zero — the worker half must never touch the page module table).
+function bootWorker(HubCtor) {
+  const handlers = {};
+  let loadCalls = 0;
+  const selfStub = {
+    registration: { scope: '/plugins/' },
+    addEventListener(type, fn) { handlers[type] = fn; },
+    clients: { matchAll: () => Promise.resolve([]) },
+    BroadcastChannel: HubCtor,
+  };
+  const sandbox = {
+    self: selfStub,
+    BroadcastChannel: HubCtor,
+    console, setTimeout, clearTimeout, setInterval, clearInterval, queueMicrotask,
+    Promise, Symbol, Object, JSON, Date, Math, Array, String, Number,
+    __ModuleLoader__: { load() { loadCalls += 1; } },
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(SRC, sandbox, { filename: 'client.js (worker half)' });
+  return {
+    handlers,
+    loadCalls: () => loadCalls,
+    click(action, data) {
+      const waits = [];
+      let closed = false;
+      handlers.notificationclick({
+        action: action || '',
+        notification: { data, close: () => { closed = true; } },
+        waitUntil: (p) => waits.push(p),
+      });
+      return { closed: () => closed, waits };
+    },
+  };
+}
+
+// An approval interaction shaped like the shipped PendingApproval: its
+// answer() is the exact verb the in-page card calls.
+function answerableApproval(key, extra, answers) {
+  return Object.assign({
+    key,
+    kind: 'approval',
+    sessionId: 's1',
+    toolName: 'pwsh',
+    reason: 'needs elevated shell',
+    answer(outcome) { answers.push(outcome); return Promise.resolve(); },
+  }, extra || {});
+}
+
+async function quickActionsHost() {
+  console.log('\n— quick-decision bridge (approval toasts carry 同意/拒绝 buttons) —');
+  const HubCtor = makeChannelHub();
+  const registered = [];
+  const shown = [];
+  const liveNotes = [];
+  const swHandlers = {};
+  const serviceWorkerStub = {
+    register(url) {
+      registered.push(url);
+      return Promise.resolve({
+        active: {},
+        showNotification(title, opts) {
+          const n = { title, opts, closed: false, close() { this.closed = true; } };
+          shown.push(n);
+          liveNotes.push(n);
+        },
+        getNotifications(filter) {
+          return liveNotes.filter((n) => !n.closed && (!filter || !filter.tag || n.opts.tag === filter.tag));
+        },
+      });
+    },
+    addEventListener(type, fn) { (swHandlers[type] ||= []).push(fn); },
+  };
+  const b = bootBundle({
+    withNotification: true,
+    extend(sandbox, windowStub) {
+      sandbox.BroadcastChannel = HubCtor;
+      sandbox.navigator = { serviceWorker: serviceWorkerStub };
+      sandbox.queueMicrotask = queueMicrotask;
+      windowStub.__DSH_BOOT__ = {
+        entries: [
+          { id: '@deepseek-ai/dsh-client-ui-session', url: '/plugins/??@deepseek-ai/dsh-client-ui-session/client.js&rev=aaa' },
+          { id: 'dsh-notify-me', url: '/plugins/??dsh-notify-me/client.js&rev=bbb' },
+        ],
+      };
+    },
+  });
+  const w = bootWorker(HubCtor);
+  assert(w.loadCalls() === 0, 'the worker half must not touch the page module table');
+
+  const host = buildHost({ withSessionStatus: true, withWorkspace: true });
+  const { mod, win, events, getTitle } = b;
+  const answers = [];
+  mod.apply(host.ctx);
+  win.__dshNotifyMe.onEvent = (kind, payload) => events.push({ kind, ...payload });
+  await sleep(20); // register() resolves on a promise tick
+
+  // 1) the bridge registers against THIS bundle's single-record combo URL
+  assert(registered.length === 1, 'service worker registered exactly once, got ' + registered.length);
+  assert(registered[0] === '/plugins/??dsh-notify-me/client.js&rev=bbb',
+    'registered the single-record bundle URL (a multi-plugin combo would break installation), got ' + registered[0]);
+  assert(win.__dshNotifyMe.debug().bridge === 'active', 'bridge reports active, got ' + win.__dshNotifyMe.debug().bridge);
+
+  // 2) an approval toast carries the buttons, a question toast never does
+  const shownFor = (key) => shown.filter((n) => n.opts.data && n.opts.data.key === key).pop();
+  b.doc.hidden = true; b.doc.visibilityState = 'hidden';
+  host.setStatus(new Map([['s1', statusRow(answerableApproval('approval:200', null, answers))]]));
+  host.notifyStatus();
+  assert(shown.length === 1, 'approval raised through the persistent channel, got ' + shown.length);
+  let note = shown[0];
+  assert(note.title === 'DSH · 审批请求', 'approval toast title, got ' + note.title);
+  const acts = note.opts.actions;
+  assert(Array.isArray(acts) && acts.length === 2, 'toast carries two actions, got ' + JSON.stringify(acts));
+  assert(acts[0].action === 'approve' && acts[1].action === 'reject', 'action ids are approve/reject');
+  assert(acts[0].title === '同意' && acts[1].title === '拒绝', 'zh button labels, got ' + JSON.stringify(acts));
+  assert(note.opts.data && note.opts.data.key === 'approval:200', 'toast data carries the interaction key');
+  assert(note.opts.data.sessionId === 's1', 'toast data carries the session id');
+  assert(b.lastNotification() === null, 'no plain constructor toast on the button path');
+
+  // 3) clicking 同意 settles the request exactly like the in-page card
+  events.length = 0;
+  let click = w.click('approve', note.opts.data);
+  await sleep(20);
+  assert(click.closed(), 'the worker closes the toast it handled');
+  assert(answers.length === 1 && answers[0] === 'allowed-once',
+    'approve button ran answer("allowed-once"), got ' + JSON.stringify(answers));
+  const dec = events.filter((e) => e.kind === 'decision');
+  assert(dec.length === 1 && dec[0].outcome === 'allowed-once' && dec[0].key === 'approval:200',
+    'decision event exposed to onEvent, got ' + JSON.stringify(dec));
+  assert(getTitle().indexOf('需要你') === -1, 'the settled wait releases the tab marker');
+
+  // 4) a stale toast decides nothing: the record is one-shot per key
+  click = w.click('approve', note.opts.data);
+  await sleep(20);
+  assert(answers.length === 1, 'a second click on a settled wait answers nothing');
+  click = w.click('reject', { key: 'approval:never-existed', sessionId: 's1' });
+  await sleep(20);
+  assert(answers.length === 1, 'a click for an unknown key answers nothing');
+
+  // 5) 拒绝 -> answer("rejected"), and the lingering toast is closed with it
+  events.length = 0;
+  const answers2 = [];
+  host.setStatus(new Map([['s1', statusRow(answerableApproval('approval:201', null, answers2))]]));
+  host.notifyStatus();
+  note = shownFor('approval:201');
+  assert(note && note.opts.tag === 'dsh-notify-me-attention-approval:201', 'each wait owns its own toast tag, got ' + (note && note.opts.tag));
+  w.click('reject', note.opts.data);
+  await sleep(20);
+  assert(answers2.length === 1 && answers2[0] === 'rejected', 'reject button ran answer("rejected"), got ' + JSON.stringify(answers2));
+  host.setStatus(new Map([['s1', statusRow(null)]]));
+  host.notifyStatus();
+
+  // 6) the second relay half works too: a decision arriving through
+  //    navigator.serviceWorker's message event (client.postMessage) settles the
+  //    request the same way, and api.decide() is its programmatic twin
+  const answers3 = [];
+  host.setStatus(new Map([['s1', statusRow(answerableApproval('approval:202', null, answers3))]]));
+  host.notifyStatus();
+  note = shownFor('approval:202');
+  assert(note, 'the relay-path wait raised an actionable toast');
+  const relayed = { source: 'dsh-notify-me', type: 'notification', action: 'approve', key: 'approval:202', sessionId: 's1' };
+  for (const fn of swHandlers.message || []) fn({ data: relayed });
+  await sleep(20);
+  assert(answers3.length === 1 && answers3[0] === 'allowed-once',
+    'the service-worker message relay settles the request, got ' + JSON.stringify(answers3));
+  const answers3b = [];
+  host.setStatus(new Map([['s1', statusRow(answerableApproval('approval:202b', null, answers3b))]]));
+  host.notifyStatus();
+  win.__dshNotifyMe.decide('approval:202b', 'allowed-once');
+  assert(answers3b.length === 1 && answers3b[0] === 'allowed-once',
+    'api.decide settles a pending approval programmatically');
+  host.setStatus(new Map([['s1', statusRow(null)]]));
+  host.notifyStatus();
+
+  // 7) answered in-page first -> the toast click must decide nothing
+  const answers4 = [];
+  host.setStatus(new Map([['s1', statusRow(answerableApproval('approval:203', null, answers4))]]));
+  host.notifyStatus();
+  note = shownFor('approval:203');
+  assert(note && note.opts.data.key === 'approval:203', 'the fourth wait raised its own actionable toast');
+  host.setStatus(new Map([['s1', statusRow(null)]])); // answered through the page card
+  host.notifyStatus();
+  w.click('approve', note.opts.data);
+  await sleep(20);
+  assert(answers4.length === 0, 'a toast outliving its request decides nothing');
+  assert(win.__dshNotifyMe.debug().actionKeys.length === 0, 'no dangling quick-decision records');
+
+  // 8) quickActions off -> plain toast, no worker registration, no buttons
+  const offHost = buildHost({ withSessionStatus: true, withWorkspace: true });
+  const offReg = [];
+  const off = bootBundle({
+    withNotification: true,
+    extend(sandbox, windowStub) {
+      sandbox.BroadcastChannel = HubCtor;
+      sandbox.navigator = { serviceWorker: {
+        register(url) { offReg.push(url); return Promise.reject(new Error('must not register')); },
+        addEventListener() {},
+      } };
+      windowStub.__DSH_BOOT__ = { entries: [{ id: 'dsh-notify-me', url: '/plugins/??dsh-notify-me/client.js&rev=ccc' }] };
+    },
+  });
+  off.win.__dshNotifyMe.setConfig({ quickActions: false });
+  off.mod.apply(offHost.ctx);
+  await sleep(20);
+  assert(offReg.length === 0, 'quickActions off registers no worker');
+  off.doc.hidden = true; off.doc.visibilityState = 'hidden';
+  offHost.setStatus(new Map([['s1', statusRow(answerableApproval('approval:210', null, []))]]));
+  offHost.notifyStatus();
+  const plain = off.lastNotification();
+  assert(plain && plain.title === 'DSH · 审批请求', 'quickActions off falls back to the plain toast');
+  assert(!plain.config.actions, 'the plain toast carries no actions (the constructor would throw on them)');
+  offHost.setStatus(new Map([['s1', statusRow(null)]]));
+  offHost.notifyStatus();
+  for (const c of [...offHost.cleanups]) c();
+
+  // 9) a bridge that cannot install (no service worker at all) degrades the
+  //    same way instead of silencing the alert
+  const noHost = buildHost({ withSessionStatus: true, withWorkspace: true });
+  const no = bootBundle({ withNotification: true });
+  no.mod.apply(noHost.ctx);
+  await sleep(20);
+  assert(no.win.__dshNotifyMe.debug().bridge.indexOf('unsupported') === 0,
+    'bridge reports why it is unavailable, got ' + no.win.__dshNotifyMe.debug().bridge);
+  no.doc.hidden = true; no.doc.visibilityState = 'hidden';
+  noHost.setStatus(new Map([['s1', statusRow(answerableApproval('approval:211', null, []))]]));
+  noHost.notifyStatus();
+  assert(no.lastNotification() && no.lastNotification().title === 'DSH · 审批请求',
+    'approval still alerts without a bridge');
+  noHost.setStatus(new Map([['s1', statusRow(null)]]));
+  noHost.notifyStatus();
+  for (const c of [...noHost.cleanups]) c();
+
+  // 10) the settings test toast drives the whole worker chain end to end
+  events.length = 0;
+  win.__dshNotifyMe.test('approval');
+  note = shown[shown.length - 1];
+  assert(note && note.opts.data && note.opts.data.test === true, 'test approval toast is flagged as a test');
+  assert(note.opts.actions && note.opts.actions.length === 2, 'test toast carries the buttons too');
+  w.click('approve', note.opts.data);
+  await sleep(20);
+  const testDec = events.filter((e) => e.kind === 'decision');
+  assert(testDec.length === 1 && testDec[0].test === true && testDec[0].outcome === 'allowed-once',
+    'test button click reports a simulated decision, got ' + JSON.stringify(testDec));
+  assert(events.filter((e) => e.kind === 'done').length === 1, 'test decision answers with a feedback toast');
+
+  for (const c of [...host.cleanups]) c();
+  console.log('quick-decision bridge OK:', JSON.stringify({
+    registered: registered[0],
+    decisions: answers.concat(answers2, answers3),
+  }));
+}
+
 (async () => {
   await legacyHost();
   await currentHost();
   await modernHost();
+  await quickActionsHost();
   console.log('\nALL SMOKE TESTS PASSED ✔');
   // Exit explicitly: marker-release timers stay armed on purpose (they mirror
   // browser behaviour) and would otherwise hold the loop open.

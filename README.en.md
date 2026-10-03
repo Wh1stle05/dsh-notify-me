@@ -6,12 +6,12 @@
 [![npm downloads](https://img.shields.io/npm/dm/dsh-notify-me?style=flat-square&label=downloads&color=1F883D)](https://www.npmjs.com/package/dsh-notify-me)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-browser-blue)
-![Size](https://img.shields.io/badge/bundle-%7E37KB-green)
+![Size](https://img.shields.io/badge/bundle-%7E79KB-green)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 ---
 
-**Step away from the DeepSeek Harness web UI — and still know what's going on.** When the agent stops and needs your input, or when a reply finishes in the background while you're in another app, dsh-notify-me alerts you with a Windows desktop notification, a sound, and a tab-title marker. Toggle it and pick the notification language right from **Settings → Notify me**.
+**Step away from the DeepSeek Harness web UI — and still know what's going on.** When the agent stops and needs your input, or when a reply finishes in the background while you're in another app, dsh-notify-me alerts you with a Windows desktop notification, a sound, and a tab-title marker. Approval notifications even carry Approve / Reject buttons, so you can settle the request without switching back. Toggle it and pick the notification language right from **Settings → Notify me**.
 
 ---
 
@@ -42,7 +42,7 @@ dsh-notify-me decouples **supervision** from **sitting in front of the screen**:
 
 | When | What you get | Default |
 | --- | --- | --- |
-| 🔔 **The agent needs your input** — sandbox approval / plan review / a question (`ask_user_question`) | Toast + sound + `🔔 Action needed ·` title marker | Alerts even while the page is visible |
+| 🔔 **The agent needs your input** — sandbox approval / plan review / a question (`ask_user_question`) | Toast + sound + `🔔 Action needed ·` title marker; approval toasts also carry Approve / Reject buttons | Alerts even while the page is visible |
 | ✅ **A reply finishes** — a turn completes; background sessions finishing are also reported | Toast + sound | Alerts only while the page is hidden / backgrounded |
 
 ## Configure it from DSH Settings
@@ -52,14 +52,15 @@ Open **Settings → Notify me** (refresh the page once after installing):
 - **Enable reminders** — master switch; when off, no toasts, no sounds and the tab title is never touched;
 - **System notifications / Sound / Volume** — toast toggle, WebAudio beep toggle and a volume slider;
 - **"Needs you" alerts while the page is open** (default on) and **"Reply finished" alerts while the page is open** (default off);
+- **Decide approvals from the toast** (default on): approval notifications carry Approve / Reject buttons, and one click settles the request exactly like the Allow once / Reject buttons on the approval card. Clicking the toast body still takes you back to the conversation;
 - **Notification language** — follow the interface / 简体中文 / English: controls the language of the alert text and the `🔔 …` title marker;
-- **Test buttons** — send one "needs you" or "reply finished" test alert with the current settings (**not** limited by the "while the page is open" toggles; the "needs you" test's title marker clears itself after ~6s).
+- **Test buttons** — send one "needs you", "reply finished" or "approval buttons" test alert with the current settings (**not** limited by the "while the page is open" toggles; the "needs you" test's title marker clears itself after ~6s).
 
 > Notification permission is required: click once on the page → **Allow** (or address-bar lock → Site settings → Notifications → Allow → reload).
 
 ## How it alerts
 
-- **System notification** — native notification-center toast (clicking it brings the DSH window back to front)
+- **System notification** — native notification-center toast (clicking it brings the DSH window back to front; approval toasts can be decided straight from the buttons)
 - **Sound** — WebAudio beeps (distinct patterns for "needs you" vs "done")
 - **Tab title marker** — while something is waiting on you, the tab title is prefixed with `🔔 Action needed · …` / `🔔 需要你 · …`
 
@@ -91,6 +92,8 @@ Verified to actually activate on `0.1.2-rc.1`, `0.1.5-rc.2` and `0.2.0-rc.2` (ea
 ```js
 window.__dshNotifyMe.test("done")        // "reply finished" sample
 window.__dshNotifyMe.test("attention")   // "needs your input" sample
+window.__dshNotifyMe.test("approval")    // "approval buttons" sample: try the Approve / Reject buttons on the toast
+window.__dshNotifyMe.debug()             // the bridge field reports the button channel: "active" = buttons work
 ```
 
 Nothing happened? 90% of the time it's one of:
@@ -113,9 +116,11 @@ window.__dshNotifyMe.setConfig({
   toast: true,                // system-notification toggle
   sound: true,                // sound toggle
   volume: 0.5,                // 0..1
-  autoFocus: true             // clicking the toast focuses the DSH window
+  autoFocus: true,            // clicking the toast focuses the DSH window
+  quickActions: true          // Approve / Reject buttons on approval toasts
 })
 window.__dshNotifyMe.resetConfig()                // restore defaults
+window.__dshNotifyMe.decide("approval:3", "allowed-once")  // programmatic decision: "allowed-once" | "rejected"
 ```
 
 ## How it works
@@ -128,12 +133,19 @@ The reminder core picks its interaction source per host generation (see the tabl
 
 The reminder core stays dependency-free and self-contained: notification copy resolves at alert time from the chosen language (follow-interface / Simplified Chinese / English). The Settings page is an **optional** React surface — it only registers into Settings when the web profile provides the `slots` / `locale` services and `react`; without them the plugin degrades gracefully to alerts-only (no Settings page).
 
+### Quick decisions, and how they reach the agent
+
+Action buttons (`actions`) belong to persistent notifications shown through `ServiceWorkerRegistration.showNotification()`; passing `actions` to the `new Notification()` constructor throws a `TypeError`. That is a browser rule no plugin can route around, so the bundle holds two jobs in the same bytes: the page half registers the reminder factory as it always did, and the very same file is registered as a Service Worker whose only task is relaying which button was clicked back to the page. The decision itself happens in the page, through the same `PendingApproval.answer('allowed-once' | 'rejected')` the approval card uses — which is why "Approve" is exactly "Allow once" and nothing broader.
+
+Every button toast is booked against its interaction key, so it can only decide the request it was raised for. Once the page answers that request or a newer one replaces it, clicking the leftover buttons decides nothing and just closes the notification. Button toasts also skip the auto-dismiss timer: an undecided approval stays in the notification center until you settle it.
+
 ## Known limitations
 
 - The page must be open for alerts to fire (background tab / minimized is fine; closing the tab stops it — that's inherent to a browser-layer plugin).
 - Notifications appear through the browser, so the browser needs "show notifications" permission in Windows settings, and notification-center "Do Not Disturb" must not suppress them.
 - The first sound/toast of each page load needs one user click on the page first (browser autoplay + permission policy).
 - Toasts are only produced once the notification permission is granted; declining means sound + title marker only.
+- Quick-decision buttons need a Service Worker: they work on `http://127.0.0.1` and `https`, not on plain `http://192.168.x.x`-style LAN addresses, and some browsers or desktop hosts never render notification buttons. The `bridge` field of `window.__dshNotifyMe.debug()` says why; toasts then fall back to their buttonless form and everything else keeps working.
 - Config lives in browser `localStorage`: switching browsers/devices or clearing site data returns to defaults (one-click restore in the Settings page).
 - On `>= 0.1.6` (including `0.2.0-rc.2`) the "reply finished" toast body carries only the session label, no assistant snippet: host snapshots no longer expose `nodes`. The alert itself still fires.
 - The title marker is written into `document.title` alongside the host: when the host recomputes the title it can overwrite the marker until the next alert event rewrites it.
@@ -143,7 +155,7 @@ The reminder core stays dependency-free and self-contained: notification copy re
 ```powershell
 node --check lib\client.js
 node --check lib\index.js
-node smoke\smoke-test.cjs        # offline state-machine test: three host generations + master switch + zh/en cases
+node smoke\smoke-test.cjs        # offline state-machine test: three host generations + master switch + zh/en cases + the quick-decision bridge (worker half included)
 node smoke\cordis-host-test.mjs  # real-cordis end-to-end (skips when no local DSH installation is found)
 npm pack --dry-run               # preview the published tarball
 ```

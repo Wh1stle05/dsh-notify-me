@@ -159,12 +159,15 @@ function makeController({ withOpen = true } = {}) {
   };
 }
 
-// Approval shaped like the shipped 0.1.2+ PendingApproval (class instance).
+// Approval shaped like the shipped 0.1.2+ PendingApproval (class instance),
+// including the answer() verb the in-page card and the toast buttons both use.
 class FakeApproval {
   constructor(key, sessionId, toolName, reason) {
     this.key = key; this.kind = 'approval'; this.sessionId = sessionId;
     this.toolName = toolName; this.reason = reason;
+    this.decisions = [];
   }
+  answer(outcome) { this.decisions.push(outcome); return Promise.resolve(); }
 }
 
 async function main() {
@@ -420,6 +423,31 @@ async function main() {
     assert(h.getTitle().indexOf('需要你') === -1,
       'tab marker cleared once pendingInteraction leaves the status row');
     console.log('status-row answer released the marker OK');
+
+    // quick decision (1.3.0): a toast button press lands here, and the lookup
+    // that resolves the live interaction must survive real cordis semantics —
+    // it goes through ctx.get('uiSession'), the same lazy read whose failure
+    // silently broke the watcher in 1.1.5.
+    h.doc.hidden = true; h.doc.visibilityState = 'hidden';
+    const appr2 = new FakeApproval('approval:decide', 's1', 'pwsh', 'decide me');
+    h.uiService.publish(new Map([['s1', { running: true, pendingInteraction: appr2, completionUnread: false }]]));
+    await tick();
+    assert(h.win.__dshNotifyMe.debug().actionKeys.indexOf('approval:decide') !== -1,
+      'the waiting approval registered a quick-decision record');
+    const settled = h.win.__dshNotifyMe.decide('approval:decide', 'allowed-once');
+    await tick();
+    assert(settled === true, 'decide() reports it settled the request');
+    assert(appr2.decisions.length === 1 && appr2.decisions[0] === 'allowed-once',
+      'decide() ran the interaction answer("allowed-once"), got ' + JSON.stringify(appr2.decisions));
+    assert(h.getTitle().indexOf('需要你') === -1, 'the decided wait releases the tab marker');
+    assert(h.win.__dshNotifyMe.decide('approval:decide', 'rejected') === false,
+      'a second decision for the same key is refused');
+    assert(appr2.decisions.length === 1, 'a settled approval answers nothing twice');
+    assert(h.win.__dshNotifyMe.decide('approval:unknown', 'allowed-once') === false,
+      'a decision for an unknown key is refused');
+    console.log('quick decision via decide() OK:', JSON.stringify(appr2.decisions));
+    h.uiService.publish(new Map([['s1', { running: true, pendingInteraction: null, completionUnread: false }]]));
+    await tick();
   }
 
   console.log('\ncordis-host-test passed');

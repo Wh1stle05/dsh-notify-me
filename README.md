@@ -6,12 +6,12 @@
 [![npm downloads](https://img.shields.io/npm/dm/dsh-notify-me?style=flat-square&label=downloads&color=1F883D)](https://www.npmjs.com/package/dsh-notify-me)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 ![Platform](https://img.shields.io/badge/platform-browser-blue)
-![Size](https://img.shields.io/badge/bundle-%7E37KB-green)
+![Size](https://img.shields.io/badge/bundle-%7E79KB-green)
 [![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 ---
 
-**离开 DSH 页面也不错过任何动静。** 当模型停下来需要你操作（审批 / 方案待确认 / 提问）、或你在别的软件时回复正好在后台完成，dsh-notify-me 会用系统通知 + 提示音 + 标签页标题标记提醒你——开关和通知语言都直接在 **DSH 设置 → 通知提醒** 里改。
+**离开 DSH 页面也不错过任何动静。** 当模型停下来需要你操作（审批 / 方案待确认 / 提问）、或你在别的软件时回复正好在后台完成，dsh-notify-me 会用系统通知 + 提示音 + 标签页标题标记提醒你——权限审批的通知还带「同意 / 拒绝」按钮，点一下就完成裁决，不用切回页面。开关和通知语言都直接在 **DSH 设置 → 通知提醒** 里改。
 
 ---
 
@@ -42,7 +42,7 @@ dsh-notify-me 把「监督」和「守在屏幕前」解耦：只在真的出现
 
 | 时机 | 提醒内容 | 默认 |
 | --- | --- | --- |
-| 🔔 **模型需要你操作** — 审批请求 / 方案待确认（plan review）/ 提问（`ask_user_question`） | 通知 + 提示音 + `🔔 需要你 ·` 标题标记 | 页面可见也提醒 |
+| 🔔 **模型需要你操作** — 审批请求 / 方案待确认（plan review）/ 提问（`ask_user_question`） | 通知 + 提示音 + `🔔 需要你 ·` 标题标记；审批的通知上直接带「同意 / 拒绝」按钮 | 页面可见也提醒 |
 | ✅ **回复完成** — 一轮回复跑完；后台会话完成也会报 | 通知 + 提示音 | 仅页面隐藏/后台时提醒 |
 
 ## 在 DSH 设置里改配置
@@ -52,14 +52,15 @@ dsh-notify-me 把「监督」和「守在屏幕前」解耦：只在真的出现
 - **启用提醒** 主开关：关闭后不再弹系统通知、不播放提示音、也不改标签页标题；
 - **系统通知 / 提示音 / 音量**：Toast、WebAudio 提示音与音量滑块；
 - **页面打开时也提醒「需要你」**（默认开）与 **页面打开时也提醒「回复完成」**（默认关）；
+- **审批通知上直接裁决**（默认开）：权限审批的通知上带「同意 / 拒绝」按钮，点一下就按审批卡片的「允许一次 / 拒绝」直接裁决，不用切回页面；点通知正文仍是原来的「切回对应对话」；
 - **通知语言**：跟随界面 / 简体中文 / English——决定通知文字与 `🔔 …` 标题标记使用的语言；
-- **测试按钮**：用当前设置立即发一条「需要你」或「回复完成」测试提醒（**不受**上面「页面打开时也提醒」开关限制；「需要你」测试的标题标记约 6 秒后自动消失）。
+- **测试按钮**：用当前设置立即发一条「需要你」「回复完成」或「审批按钮」测试提醒（**不受**上面「页面打开时也提醒」开关限制；「需要你」测试的标题标记约 6 秒后自动消失）。
 
 > 需要浏览器通知权限：页面上点一下 → 允许；或地址栏锁 → 站点设置 → 通知 → 允许 → 刷新。
 
 ## 提醒方式
 
-- **系统通知**：Windows 通知中心 Toast（点击可把 DSH 窗口切回前台）
+- **系统通知**：Windows 通知中心 Toast（点击可把 DSH 窗口切回前台；审批的通知点按钮直接裁决）
 - **提示音**：WebAudio 合成音（「需要你」与「完成」使用不同音型）
 - **标签页标题标记**：有待处理事项时，标题前出现 `🔔 需要你 · …` / `🔔 Action needed · …`
 
@@ -91,6 +92,8 @@ dsh plugin --profile web add dsh-notify-me
 ```js
 window.__dshNotifyMe.test("done")        // 「完成」示例
 window.__dshNotifyMe.test("attention")   // 「需要你」示例
+window.__dshNotifyMe.test("approval")    // 「审批按钮」示例：通知上有「同意 / 拒绝」，点着试试
+window.__dshNotifyMe.debug()             // 桥接状态看 bridge 字段，active = 按钮可用
 ```
 
 没反应？九成是：通知权限被拒绝（在页面上点一下 → 选「允许」；或地址栏锁 → 站点设置 → 通知 → 允许 → 刷新）、装完没重启 DSH、系统设置里浏览器通知被关。
@@ -109,9 +112,11 @@ window.__dshNotifyMe.setConfig({
   toast: true,                // 系统通知开关
   sound: true,                // 提示音开关
   volume: 0.5,                // 音量 0~1
-  autoFocus: true             // 点通知切回 DSH 窗口
+  autoFocus: true,            // 点通知切回 DSH 窗口
+  quickActions: true          // 审批通知上的「同意 / 拒绝」按钮
 })
 window.__dshNotifyMe.resetConfig()                // 恢复默认
+window.__dshNotifyMe.decide("approval:3", "allowed-once")  // 程序化裁决："allowed-once" | "rejected"
 ```
 
 ## 工作原理
@@ -124,12 +129,19 @@ window.__dshNotifyMe.resetConfig()                // 恢复默认
 
 提醒核心仍然零第三方运行时依赖、完全自包含：通知文字按所选语言（跟随界面 / 中文 / English）即时解析。设置页是**可选**的 React 呈现层——当 DSH web profile 提供 `slots` / `locale` / `react` 时才注册进「设置 → 通知提醒」，缺任一能力时插件自动降级为纯提醒（无设置页），不影响功能。
 
+### 快捷裁决怎么走通的
+
+通知按钮（`actions`）只属于 Service Worker 弹的持久通知，往 `new Notification()` 里传 `actions` 会直接抛 `TypeError`——这是绕不开的浏览器限制。所以 bundle 一份文件干两件事：页面里照常注册提醒工厂，同一份字节再注册成一个只干转信的 Service Worker，把「点了哪个按钮」（同意 / 拒绝 / 点正文）带回页面。真正的裁决发生在页面里，调的是审批卡片自己用的 `PendingApproval.answer('allowed-once' | 'rejected')`，所以「同意」就是「允许一次」，不多放行任何东西。
+
+每条按钮通知按交互 key 记账，一次只认领一条等待；请求被页面里答掉、或被新请求顶替之后，残留通知上的按钮再点也不会误裁，只是安静地关掉。带按钮的通知不设自动消失——审批没裁决就一直留在通知中心里等你。
+
 ## 已知限制
 
 - 页面必须开着才会提醒（后台标签/最小化可以；关标签页即失效——浏览器层方案固有限制）。
 - 通知经由浏览器弹出，需允许浏览器通知权限，且勿扰模式不能屏蔽它。
 - 每次页面加载后第一次出声/弹通知前，需在页面上点击过一次（浏览器自动播放与权限策略）。
 - 未授权通知权限时只有提示音与标题标记。
+- 快捷裁决按钮要 Service Worker：`http://127.0.0.1`、`https` 可用，`http://192.168.x.x` 这类局域网地址不行；浏览器或桌面宿主不渲染通知按钮时，`window.__dshNotifyMe.debug()` 的 `bridge` 字段会说明原因，通知自动退回无按钮样式，其余功能不受影响。
 - 配置存在浏览器 `localStorage`：换浏览器/设备或清除站点数据后会回到默认值（设置页可一键恢复默认）。
 - `≥ 0.1.6`（含 `0.2.0-rc.2`）的「回复完成」提醒正文只有会话名，不再附带回复摘要——宿主快照已不再提供 `nodes`；提醒本身照常触发。
 - 标题标记由宿主与插件共同写 `document.title`：宿主重算标题时标记可能被覆盖，直到下一次提醒事件重新写成。
@@ -139,7 +151,7 @@ window.__dshNotifyMe.resetConfig()                // 恢复默认
 ```powershell
 node --check lib\client.js
 node --check lib\index.js
-node smoke\smoke-test.cjs        # 离线状态机冒烟测试：三代宿主 + 主开关 + 中英语言用例
+node smoke\smoke-test.cjs        # 离线状态机冒烟测试：三代宿主 + 主开关 + 中英语言用例 + 快捷裁决桥（Service Worker 半侧一并跑）
 node smoke\cordis-host-test.mjs  # 真 cordis 端到端（找不到本机 DSH 时自动跳过）
 npm pack --dry-run               # 预览发布包
 ```

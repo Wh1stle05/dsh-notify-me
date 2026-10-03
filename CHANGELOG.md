@@ -2,6 +2,26 @@
 
 All notable changes to **dsh-notify-me** are documented here.
 
+## [1.3.0] — 2026-10-03
+
+### 新增
+- **审批通知上直接裁决**（设置页新开关「审批通知上直接裁决」，默认开启）：权限审批的系统通知带上「同意 / 拒绝」按钮，点一下就完成裁决，不用切回页面。按钮调的是审批卡片自己的 `PendingApproval.answer('allowed-once' | 'rejected')`——「同意」即「允许一次」，只放行这一次，与卡片上的按钮完全同义；点通知正文仍是 1.1.8 的「回到对应对话」。
+- 绕开的是一条浏览器硬限制：`actions` 只属于 Service Worker 弹的持久通知，往 `new Notification()` 里传 `actions` 直接抛 `TypeError`。所以 bundle 一份文件两用：页面里照常注册提醒工厂，同一份字节再注册成 Service Worker，只负责把「点了哪个按钮」（同意 / 拒绝 / 点正文）转告页面（BroadcastChannel 与客户端 postMessage 双通道），裁决本身仍发生在页面里。注册只用本插件自己的单条目 combo URL（`/plugins/??dsh-notify-me/client.js&rev=…`，取自 `__DSH_BOOT__.entries`）——多插件 combo 会在 worker 里执行别家的 factory，注册必挂。
+- 按钮通知按交互 key 记账：一条等待一次只认领一张通知；页面里先答掉、或被新请求顶替之后，残留通知上的按钮再点不裁决任何东西，只把通知关掉。请求消失时残留通知一并关闭；带按钮的通知不设 15 秒自动消失，未裁决的审批留在通知中心等你。
+- `window.__dshNotifyMe` 新增 `decide(key, outcome)`（按钮的程序化同款，`outcome` 取 `"allowed-once"` / `"rejected"`）与 `test("approval")`（设置页新增「测试『审批按钮』」按钮，一条通知端到端验证按钮链路）；`debug()` 新增 `quickActions` / `bridge`（`active` = 按钮可用，否则给出不可用原因）/ `actionKeys`；`onEvent` 新增 `decision` 事件（`{key, outcome, sessionId}`，测试点击另带 `test: true`）。
+
+### 变更
+- 带按钮的审批通知改用 `dsh-notify-me-attention-<key>` 独立标签，多条待审批互不顶掉；提问 / 方案确认沿用原来的 `dsh-notify-me-attention` 标签行为。
+- 不支持 Service Worker 的环境（`http://` 局域网地址等）自动退回 1.2.x 的无按钮通知，其余功能不受影响，`debug().bridge` 显示具体原因。
+- 版本号 1.2.1 → 1.3.0；`window.__dshNotifyMe.version` 同步。
+
+### 测试
+- `smoke/smoke-test.cjs` 新增快捷裁决桥用例，把 bundle 的两半都在同一套件里跑起来（worker 半侧执行在 worker 形状的 vm 上下文，页面半侧走常规桩，两边用同一个 BroadcastChannel 桩对接）：单条目 combo URL 注册、按钮文案与 `data` 携带 key/会话、点「同意」→ `answer('allowed-once')`、点「拒绝」→ `answer('rejected')`、陈旧 key 与未知 key 一律不裁决、页面里先答掉后残留按钮失效、`quickActions` 关闭或无 Service Worker 时退回普通通知且不带 `actions`（构造函数带它会抛 `TypeError`）、测试按钮走完整 worker 链路。
+- `smoke/cordis-host-test.mjs` 在 `sessionStatus` 宿主上补真 cordis 语义的裁决用例：`decide()` 经 `ctx.get("uiSession")` 找到活着的交互并调它的 `answer()`，重复裁决与未知 key 拒绝，标记随之释放。
+
+### 已知限制
+- 按钮要 Service Worker：`http://127.0.0.1`、`https` 可用，`http://192.168.x.x` 这类局域网地址不行；DSH Desktop（Electron）里按钮能否渲染未实测，不渲染时按上述降级走无按钮通知。
+
 ## [1.2.1] — 2026-10-03
 
 ### 修复
