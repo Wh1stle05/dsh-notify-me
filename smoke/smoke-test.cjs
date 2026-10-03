@@ -693,6 +693,58 @@ async function modernHost() {
   assert(nhost.opened.length === 1, 'a session missing from the list is never opened');
   for (const c of [...nhost.cleanups]) c();
 
+  // 11) the plan-review copy and its question text survive the sessionStatus
+  //     migration (same claim as the older generations, this store shape only)
+  events.length = 0;
+  host.setStatus(new Map([
+    ['s1', statusRow(null)],
+    ['s2', statusRow(planReview('plan-review:107', { sessionId: 's2' }))],
+  ]));
+  host.notifyStatus();
+  const planAtt = events.filter((e) => e.kind === 'attention');
+  assert(planAtt.length === 1 && planAtt[0].title === 'DSH · 方案待确认',
+    'plan-review copy on the sessionStatus host, got ' + JSON.stringify(planAtt));
+  assert(planAtt[0].body.indexOf('执行这个方案？') !== -1,
+    'plan-review body carries the question text, got ' + planAtt[0].body);
+  assert(getTitle().indexOf('需要你') !== -1, 'plan-review marks the tab');
+  events.length = 0;
+  host.setStatus(new Map([['s1', statusRow(null)], ['s2', statusRow(null)]]));
+  host.notifyStatus();
+  assert(getTitle().indexOf('需要你') === -1, 'plan-review mark released after the answer');
+
+  // 12) a wait registered before the plugin attached still alerts once here
+  //     (fresh boot: the status row exists before apply runs)
+  const late = bootBundle();
+  const lateHost = buildHost({ withSessionStatus: true, withWorkspace: true });
+  lateHost.setStatus(new Map([['s1', statusRow(approval('approval:108'))]]));
+  late.doc.hidden = true; late.doc.visibilityState = 'hidden';
+  late.mod.apply(lateHost.ctx); // alerts synchronously for the pre-existing wait
+  const seeded = late.events.filter((e) => e.kind === 'attention');
+  assert(seeded.length === 1, 'pre-existing sessionStatus wait alerts once on bind, got ' + seeded.length);
+  assert(late.getTitle().indexOf('需要你') !== -1, 'pre-existing wait marks the tab');
+  late.events.length = 0;
+  lateHost.setStatus(new Map([['s1', statusRow(null)]]));
+  lateHost.notifyStatus();
+  assert(late.getTitle().indexOf('需要你') === -1, 'pre-existing wait releases its mark');
+  for (const c of [...lateHost.cleanups]) c();
+
+  // 13) a replacement interaction in the same session swaps the mark instead of
+  //     stacking a second one that nothing can release
+  events.length = 0;
+  host.setStatus(new Map([['s1', statusRow(approval('approval:109'))]]));
+  host.notifyStatus();
+  assert(events.filter((e) => e.kind === 'attention').length === 1, 'first wait alerted');
+  events.length = 0;
+  host.setStatus(new Map([['s1', statusRow(question('question:110'))]]));
+  host.notifyStatus();
+  assert(events.filter((e) => e.kind === 'attention').length === 1,
+    'the replacement alerted under its new key');
+  assert(getTitle().indexOf('需要你') !== -1, 'the replacement keeps the tab marked');
+  host.setStatus(new Map([['s1', statusRow(null)]]));
+  host.notifyStatus();
+  assert(getTitle().indexOf('需要你') === -1,
+    'answering the replacement clears the mark — the replaced key left nothing behind');
+
   for (const c of [...host.cleanups]) c();
   assert(host.listeners.status.length === 0, 'sessionStatus unsubscribed after dispose');
   assert(host.listeners.face.length === 0, 'face unsubscribed after dispose');

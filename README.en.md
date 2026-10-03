@@ -78,9 +78,11 @@ Restart `dsh web`, then hard-refresh the page (Ctrl+Shift+R).
 
 | Host generation | "Needs you" interaction source | Current session | Toast-click navigation |
 | --- | --- | --- | --- |
-| `<= 0.1.1-rc.2` | controller snapshot `pending[]` | snapshot `current` | `sessions.open()` |
-| `0.1.2-alpha.2 .. 0.1.5-rc.3` | `uiSession.pendingInteractions` | snapshot `current` | `sessions.open()` |
+| `<= 0.1.2-alpha.1` | controller snapshot `pending[]` | snapshot `current` | `sessions.open()` |
+| `0.1.2-alpha.2 .. 0.1.6-alpha.1` | `uiSession.pendingInteractions` | snapshot `current` | `sessions.open()` |
 | `>= 0.1.6-alpha.2` (incl. `0.2.0-rc.2`) | `uiSession.sessionStatus` | `retainedBy.mainView` | `uiWorkspace.openSession()` |
+
+The ranges are illustrative: the plugin picks its source by store shape (whenever `sessionStatus` exists it takes the new path); the version numbers only mark where each shape appeared.
 
 Verified to actually activate on `0.1.2-rc.1`, `0.1.5-rc.2` and `0.2.0-rc.2` (each booted in its own profile: the Settings → Notifications section registers, i.e. the plugin's `apply` really runs), and previously on `0.1.1-rc.2`. Two traps are worth remembering: a package listed in `dsh.client.inject` that a newer runtime no longer ships parks the client entry at `pending (waiting for services: …)` forever — which is what broke 1.1.3 on `0.1.2-rc.1` and later; and when the host renames a store or a field nothing throws, alerts just go **silent** — `0.2.0-rc.2` moved `pendingInteractions`→`sessionStatus`, `list.current`→`retainedBy.mainView` and `sessions.open()`→`uiWorkspace.openSession()`. So every adaptation must confirm `window.__dshNotifyMe.debug()` reports `bound` and which source answered.
 

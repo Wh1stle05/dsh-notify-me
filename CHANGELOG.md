@@ -17,11 +17,9 @@ All notable changes to **dsh-notify-me** are documented here.
 - **`0.1.6` 及以后的宿主上认不出「当前会话」**：会话列表快照不再有 `current`（`SessionListState` 只剩 `ids / byId / phase / projectionsBySession`），于是当前会话面（face）订阅从未建立、`onListChanged()` 还把当前会话当成后台会话评估——后果是 1.1.7 的「当前对话不弹通知」规则失效（审批卡片就在屏幕上，Toast 仍会盖上去），标签页标记的归属也随之错位。现在按宿主自己的口径推导：有 `current` 用它，没有就取 `retainedBy.mainView > 0` 的那一行（与内置 `DocumentTitle` / `ui-workspace` / `ui-session` 的判定一致）。
 - **`0.1.6` 及以后点通知切不回对应会话**：`sessions.open(id)` 已被移除，导航改由 `uiWorkspace.openSession(id)` 承担；插件现在两个都试（`open` 优先，旧宿主行为不变），会话已不在列表时依旧不调用。`debug()` 新增 `currentSession` 便于核对。
 
-### 新增
-- `sessionStatus` 适配完整：同一会话里等待被替换成新 key 时旧的标题标记随之释放，等待消失（`pendingInteraction` 变 `null`）时按 key 释放标记，重复通知不重复提醒。
-
 ### 变更
-- `peerDependencies` 放宽为 `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-rc.1 || ^0.1.5-rc.1 || >=0.1.6-alpha.2 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0`：原范围在 `0.2.0-rc.2` 上被 `evaluatePluginCompatibility` 判为不兼容，`dsh plugin add` 会拒绝并回滚安装（`0.3` 线仍被拒）。`dsh.compatibility.dshReleases` 增加 `0.2.0-rc.2: compatible`。
+- 提醒语义在适配后原样保持（1.1.x 既有逻辑，不是新行为）：同一会话里等待被替换成新 key 时旧的标题标记随之释放，等待消失（`pendingInteraction` 变 `null`）时按 key 释放标记，重复通知不重复提醒。
+- `peerDependencies` 放宽为 `^0.1.0-rc.6 || ^0.1.1-rc.2 || ^0.1.2-rc.1 || ^0.1.5-rc.1 || >=0.1.6-alpha.2 <0.2.0-0 || >=0.2.0-rc.1 <0.3.0-0`：原范围在 `0.2.0-rc.2` 上被 `evaluatePluginCompatibility` 判为不兼容，`dsh plugin add` 会拒绝并回滚安装（`0.3` 线仍被拒）。`dsh.compatibility.dshReleases` 增加 `0.2.0-rc.2: compatible`。范围对未实测的 `0.2.x` 正式版同样放行，是否兼容以 `dshReleases` 的实测声明为准。
 - 版本号 1.1.8 → 1.2.0（新宿主代际）；`window.__dshNotifyMe.version` 同步。
 - 设置页字典注册改为把 `locale.register()` 返回的 disposer 交给 `ctx.effect`（与官方 `ui-approval` 写法一致），客户端插件 HMR 重载时不会因「同名 namespace 已注册」而丢掉设置页。
 - `uiSession` 绑定的诊断降噪：真实 `0.2.0-rc.2` 页面上每次加载都会出现的那条 `uiSession is provided but not reachable` 警告其实是**启动竞态**（本插件的客户端条目常早于 `ui-session` 条目激活，此时 `ctx.get()` 按 cordis 的严格语义拿不到尚未激活的服务），并非缺陷。现在只有**能拿到服务实例、但它既没有 `sessionStatus` 也没有 `pendingInteractions`** 时才打一条警告（并提示附上 `debug()` 输出）；「还没可见」保持安静，由 1.5s 重试定时器接管，`debug().uiSessionNote` 仍可查。
