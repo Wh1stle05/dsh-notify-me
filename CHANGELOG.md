@@ -12,6 +12,7 @@ All notable changes to **dsh-notify-me** are documented here.
 ### 变更
 - 版本号 1.3.1 → 1.4.0；`window.__dshNotifyMe.version` 同步。
 - README（中英）补上设置页新开关、提醒时机说明、控制台配置示例与工作原理里的子代理口径。
+- README（中英）新增「致谢与贡献须知 / Credits & how contributions land」：外部 PR 的署名口径与贡献者名单。
 
 ### 测试
 - `smoke/smoke-test.cjs` 新增子代理用例：`ignoreSubagent` 默认值与 `debug()` 字段、子代理完成不提醒而普通后台会话照常、子代理等待不提醒也不打标题标记、分支（fork）会话仍提醒、关掉开关后子代理的等待与完成重新提醒。
