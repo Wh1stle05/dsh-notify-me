@@ -32,7 +32,7 @@ dsh-notify-me 把「监督」和「守在屏幕前」解耦：只在真的出现
 
 ## 效果预览
 
-| Windows 系统通知效果 |
+| 系统通知效果（截图来自 Windows） |
 | --- |
 | ![DSH 通知效果](https://raw.githubusercontent.com/chromoany/dsh-notify-me/main/docs/screenshots/notify-toast.png) |
 
@@ -42,7 +42,7 @@ dsh-notify-me 把「监督」和「守在屏幕前」解耦：只在真的出现
 
 | 时机 | 提醒内容 | 默认 |
 | --- | --- | --- |
-| 🔔 **模型需要你操作** — 审批请求 / 方案待确认（plan review）/ 提问（`ask_user_question`） | 通知 + 提示音 + `🔔 需要你 ·` 标题标记；审批的通知上直接带「同意 / 拒绝」按钮 | 页面可见也提醒 |
+| 🔔 **模型需要你操作** — 审批请求 / 方案待确认（plan review）/ 提问（`ask_user_question`） | 通知 + 提示音 + `🔔 需要你 ·` 标题标记；审批的通知上直接带「同意 / 拒绝」按钮 | 页面可见也提醒（当前对话除外：默认只留标题标记） |
 | ✅ **回复完成** — 一轮回复跑完；后台会话完成也会报 | 通知 + 提示音 | 仅页面隐藏/后台时提醒 |
 
 ## 在 DSH 设置里改配置
@@ -52,15 +52,17 @@ dsh-notify-me 把「监督」和「守在屏幕前」解耦：只在真的出现
 - **启用提醒** 主开关：关闭后不再弹系统通知、不播放提示音、也不改标签页标题；
 - **系统通知 / 提示音 / 音量**：Toast、WebAudio 提示音与音量滑块；
 - **页面打开时也提醒「需要你」**（默认开）与 **页面打开时也提醒「回复完成」**（默认关）；
+- **当前对话不弹通知**（默认开）：等待就发生在你正看着的对话里时只留标题标记，不弹通知也不响音（免得盖住审批卡片）；页面切到后台立刻补发，若你已经处理掉就作废。其它后台会话不受影响；
+- **点击通知回到对应对话**（默认开）：点通知把 DSH 带到前台并切到提醒所属的对话；关掉后点通知不做任何事；
 - **审批通知上直接裁决**（默认开）：权限审批的通知上带「同意 / 拒绝」按钮，点一下就按审批卡片的「允许一次 / 拒绝」直接裁决，不用切回页面；点通知正文仍是原来的「切回对应对话」；
 - **通知语言**：跟随界面 / 简体中文 / English——决定通知文字与 `🔔 …` 标题标记使用的语言；
 - **测试按钮**：用当前设置立即发一条「需要你」「回复完成」或「审批按钮」测试提醒（**不受**上面「页面打开时也提醒」开关限制；「需要你」测试的标题标记约 6 秒后自动消失）。
 
-> 需要浏览器通知权限：页面上点一下 → 允许；或地址栏锁 → 站点设置 → 通知 → 允许 → 刷新。
+> 需要浏览器通知权限：页面上点一下 → 允许；或地址栏锁 → 站点设置 → 通知 → 允许 → 刷新。macOS 还要在 系统设置 → 通知 里允许该浏览器。
 
 ## 提醒方式
 
-- **系统通知**：Windows 通知中心 Toast（点击可把 DSH 窗口切回前台；审批的通知点按钮直接裁决）
+- **系统通知**：经浏览器弹出的系统通知，进 Windows 通知中心或 macOS 通知中心（点击回到提醒所属的对话；审批的通知点按钮直接裁决）
 - **提示音**：WebAudio 合成音（「需要你」与「完成」使用不同音型）
 - **标签页标题标记**：有待处理事项时，标题前出现 `🔔 需要你 · …` / `🔔 Action needed · …`
 
@@ -108,11 +110,12 @@ window.__dshNotifyMe.setConfig({
   enabled: true,           // false = 关闭所有提醒（主开关）
   language: "auto",        // 'auto' 跟随界面 | 'zh' 简体中文 | 'en' English
   attentionHiddenOnly: false, // true = 页面可见时「需要你」不提醒
+  currentHiddenOnly: true,    // true = 当前对话的等待只留标题标记（转后台补发）
   doneHiddenOnly: true,       // false = 页面可见时「完成」也提醒
   toast: true,                // 系统通知开关
   sound: true,                // 提示音开关
   volume: 0.5,                // 音量 0~1
-  autoFocus: true,            // 点通知切回 DSH 窗口
+  autoFocus: true,            // 点通知回到提醒所属的对话
   quickActions: true          // 审批通知上的「同意 / 拒绝」按钮
 })
 window.__dshNotifyMe.resetConfig()                // 恢复默认
@@ -142,9 +145,11 @@ window.__dshNotifyMe.decide("approval:3", "allowed-once")  // 程序化裁决：
 - 每次页面加载后第一次出声/弹通知前，需在页面上点击过一次（浏览器自动播放与权限策略）。
 - 未授权通知权限时只有提示音与标题标记。
 - 快捷裁决按钮要 Service Worker：`http://127.0.0.1`、`https` 可用，`http://192.168.x.x` 这类局域网地址不行；浏览器或桌面宿主不渲染通知按钮时，`window.__dshNotifyMe.debug()` 的 `bridge` 字段会说明原因，通知自动退回无按钮样式，其余功能不受影响。
+- macOS：浏览器里提醒、提示音、标题标记、点通知跳转都没有平台假设，照常工作；但 DSH Desktop（Electron）的系统通知要求应用已签名，未签名的通知直接发不出去，官方 macOS 版是否满足这一前提未实测；审批按钮在 macOS 与桌面宿主上的渲染同样未实测，不渲染时自动退回无按钮通知。
 - 配置存在浏览器 `localStorage`：换浏览器/设备或清除站点数据后会回到默认值（设置页可一键恢复默认）。
 - `≥ 0.1.6`（含 `0.2.0-rc.2`）的「回复完成」提醒正文只有会话名，不再附带回复摘要——宿主快照已不再提供 `nodes`；提醒本身照常触发。
 - 标题标记由宿主与插件共同写 `document.title`：宿主重算标题时标记可能被覆盖，直到下一次提醒事件重新写成。
+- 「当前对话不弹通知」按 `document.hidden` 判定：窗口被别的应用完全盖住时仍算「页面可见」，此时当前对话的等待照样静默。
 
 ## 开发自检
 
@@ -156,7 +161,7 @@ node smoke\cordis-host-test.mjs  # 真 cordis 端到端（找不到本机 DSH �
 npm pack --dry-run               # 预览发布包
 ```
 
-`cordis-host-test.mjs` 会从本机 DSH 安装借 `@deepseek-ai/cordis`；源码 checkout 里没有 profile 依赖时，用 `DSH_CORDIS_PATH=<checkout>/vendor/cordis/lib/index.js` 指定即可。
+`cordis-host-test.mjs` 会从本机 DSH 安装借 `@deepseek-ai/cordis`（依次探测 npm 全局目录、`~/.dsh/profiles/web/node_modules` 与 `~/.dsh/profiles/node_modules` 平铺回退目录）；源码 checkout 里没有 profile 依赖时，用 `DSH_CORDIS_PATH=<checkout>/vendor/cordis/lib/index.js` 指定即可。
 
 ## License
 
