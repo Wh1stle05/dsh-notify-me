@@ -2,6 +2,25 @@
 
 All notable changes to **dsh-notify-me** are documented here.
 
+## [1.5.2] — 2026-10-04
+
+### 新增
+- **设置页新增「运行环境」**（默认自动识别）：按页面协议（`dsh-app://` = 桌面端 DSH Desktop）识别 Web 端 / 桌面端，识别不准时可手动指定「桌面端」或「Web 端」。手动覆盖同时决定两件事：点通知的抬窗通道（桌面端 `dsh://` 深链 / Web 端 `window.focus()`）与快捷裁决按钮的可用性标注；覆盖与自动识别不一致时设置页明示检测结果，强选「桌面端」但页面并非 `dsh-app://` 时另提示可能弹「打开应用」确认框。
+
+### 修复
+- **桌面端「点击通知回到对应对话」真正把窗口带到前台**（issue #9）：DSH Desktop 的页面跑在 `dsh-app://app`（Electron），DOM `window.focus()` 碰不到原生窗口，此前点通知只在后台切好对话、窗口不上前台。现在点通知正文时页面发一条隐藏 iframe 导航到 `dsh://open` —— 子框架导航不经过壳的 `will-navigate` / window-open 拦截，URL 交给系统协议注册，应用单实例锁的 `second-instance` 处理走壳自己的 `focusPrimaryWindow()`（restore + show + focus）。窗口隐藏在托盘、被别的窗口压住、最小化都能抬回来；切对话行为不变，浏览器端不受影响。
+
+### 变更
+- **设置页在桌面端明示快捷裁决按钮不可用**：`dsh-app://` 页面无法注册 Service Worker（实测），审批通知的「同意 / 拒绝」按钮渲染不了、自动退回无按钮样式；此前开关本身毫无标注（只有测试按钮的反馈里带一行原始 `bridge` 状态），容易被当成开关坏了。现在设置页在桌面端直接说明这是宿主限制；「测试『审批按钮』」在无桥环境发普通测试通知时也明说按钮渲染不了。
+- **测试按钮的反馈文字移到按钮正下方**：此前落在页面最底部（常在视口外），点了测试看不到任何反馈，像「没反应」；无桥 / 开关关闭时的提示也一并放在同一位置。
+- `window.__dshNotifyMe.debug()` 新增 `desktop`（生效环境是否桌面端）、`raiseChannel`（`dsh-deeplink` / `window-focus`）、`hostEnv`（设置值）与 `hostEnvDetected`（自动识别结果）。
+- 版本号 1.5.1 → 1.5.2；`window.__dshNotifyMe.version` 同步。
+- README（中英）同步：设置清单加「运行环境」，新增「桌面端怎么抬窗的 / How the Desktop window gets raised」一节，「点击通知回到对应对话」「审批通知上直接裁决」两条口径与已知限制（桌面端按钮不可用由「未实测」改为实测结论）。
+
+### 测试
+- 抬窗通道实测：最小 Electron 44 复刻（`setWindowOpenHandler` / `will-navigate` 与桌面壳同款拦截、不装 `setPermissionRequestHandler`）上，非沙箱 iframe 导航 `dsh://open` 抬起真实 DSH Desktop 窗口（restore + 前台约 0.8s），沙箱 iframe 被拒（Electron GHSA-p2rr-rvmm-c5fp 修复生效），`window.focus()` 不抬（与 issue #9 结论一致）；`dsh://open` 经系统协议回流四轮实测均可靠抬窗。
+- `smoke/smoke-test.cjs` 新增桌面抬窗通道用例段：桌面端点通知正文发 `dsh://open` 深链且仍切对话、浏览器端绝不发深链、`hostEnv` 手动覆盖双向生效（强 Web 桌面页不发链、强桌面 Web 页发链）。
+
 ## [1.5.1] — 2026-10-04
 
 ### 修复

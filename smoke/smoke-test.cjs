@@ -1486,6 +1486,161 @@ async function subagentSessions() {
   for (const c of [...host.cleanups]) c();
 }
 
+// ────────── desktop shell raise channel (1.5.2) ──────────
+// On the packaged desktop (dsh-app://app inside Electron) DOM window.focus()
+// never touches the native window and the shell's will-navigate / window-open
+// handlers block every ordinary way to fire a dsh:// URL, so a toast click
+// additionally rides the app's own dsh://open deep link through a hidden
+// iframe — subframe navigation is the one path past those handlers. In a
+// browser the deep link must never fire (it would raise a protocol prompt).
+async function desktopRaiseChannel() {
+  console.log('\n— desktop shell (dsh-app://) raise channel —');
+  const iframes = [];
+  const focusCount = { n: 0 };
+  const b = bootBundle({
+    withNotification: true,
+    extend(sandbox) {
+      sandbox.location = { origin: 'dsh-app://app', protocol: 'dsh-app:' };
+      sandbox.document.body = {
+        appendChild(node) { iframes.push(node); return node; },
+        removeChild() {},
+      };
+      sandbox.document.createElement = () => ({
+        style: {},
+        setAttribute() {},
+        parentNode: sandbox.document.body,
+      });
+      sandbox.window.focus = () => { focusCount.n += 1; };
+    },
+  });
+  const host = buildHost({ withSessionStatus: true, withWorkspace: true });
+  const { mod, win, doc } = b;
+  mod.apply(host.ctx);
+  await sleep(20);
+  assert(win.__dshNotifyMe.debug().desktop === true, 'debug() reports the desktop shell');
+  assert(win.__dshNotifyMe.debug().raiseChannel === 'dsh-deeplink', 'debug() reports the deep-link raise channel');
+  doc.hidden = true; doc.visibilityState = 'hidden';
+  host.setList({
+    ids: ['s1', 's2'],
+    byId: { s1: { displayTitle: '当前会话', retainedBy: { mainView: 1 } }, s2: { displayTitle: '后台任务', retainedBy: {} } },
+    phase: 'ready',
+  });
+  host.notifyList();
+  host.setStatus(new Map([['s2', statusRow(question('question:401', { sessionId: 's2' }))]]));
+  host.notifyStatus();
+  const note = b.lastNotification();
+  assert(note && typeof note.onclick === 'function', 'the desktop toast body click is wired');
+  note.onclick();
+  await sleep(20);
+  assert(focusCount.n === 1, 'window.focus() is still called, got ' + focusCount.n);
+  assert(iframes.length === 1 && iframes[0].src === 'dsh://open',
+    'the click fires the dsh://open deep link through a hidden iframe, got ' + JSON.stringify(iframes.map((f) => f.src)));
+  assert(host.opened.length === 1 && host.opened[0] === 's2',
+    'the click still switches the alerted conversation, got ' + JSON.stringify(host.opened));
+  for (const c of [...host.cleanups]) c();
+
+  // In a browser there is no dsh:// handler: the deep link must never fire.
+  const webIframes = [];
+  const wb = bootBundle({
+    withNotification: true,
+    extend(sandbox) {
+      sandbox.document.body = {
+        appendChild(node) { webIframes.push(node); return node; },
+        removeChild() {},
+      };
+      sandbox.document.createElement = () => ({ style: {}, setAttribute() {}, parentNode: sandbox.document.body });
+    },
+  });
+  const webHost = buildHost({ withSessionStatus: true, withWorkspace: true });
+  wb.mod.apply(webHost.ctx);
+  await sleep(20);
+  assert(wb.win.__dshNotifyMe.debug().desktop === false, 'a plain origin is not the desktop shell');
+  assert(wb.win.__dshNotifyMe.debug().raiseChannel === 'window-focus', 'browsers keep the window-focus channel');
+  wb.doc.hidden = true; wb.doc.visibilityState = 'hidden';
+  webHost.setList({
+    ids: ['s1', 's2'],
+    byId: { s1: { displayTitle: '当前会话', retainedBy: { mainView: 1 } }, s2: { displayTitle: '后台任务', retainedBy: {} } },
+    phase: 'ready',
+  });
+  webHost.notifyList();
+  webHost.setStatus(new Map([['s2', statusRow(question('question:402', { sessionId: 's2' }))]]));
+  webHost.notifyStatus();
+  const webNote = wb.lastNotification();
+  assert(webNote && typeof webNote.onclick === 'function', 'the browser toast body click is wired');
+  webNote.onclick();
+  await sleep(20);
+  assert(webIframes.length === 0,
+    'no deep link fires in a browser, got ' + JSON.stringify(webIframes.map((f) => f.src)));
+  assert(webHost.opened.length === 1 && webHost.opened[0] === 's2', 'the browser click switches the conversation');
+  for (const c of [...webHost.cleanups]) c();
+
+  // The hostEnv setting overrides detection in both directions.
+  const forcedWeb = [];
+  const fw = bootBundle({
+    withNotification: true,
+    extend(sandbox) {
+      sandbox.location = { origin: 'dsh-app://app', protocol: 'dsh-app:' };
+      sandbox.document.body = { appendChild(node) { forcedWeb.push(node); return node; }, removeChild() {} };
+      sandbox.document.createElement = () => ({ style: {}, setAttribute() {}, parentNode: sandbox.document.body });
+    },
+  });
+  const fwHost = buildHost({ withSessionStatus: true, withWorkspace: true });
+  fw.mod.apply(fwHost.ctx);
+  await sleep(20);
+  fw.win.__dshNotifyMe.setConfig({ hostEnv: 'web' });
+  assert(fw.win.__dshNotifyMe.debug().desktop === false, 'forcing web overrides desktop detection');
+  assert(fw.win.__dshNotifyMe.debug().raiseChannel === 'window-focus', 'forced web keeps the window-focus channel');
+  assert(fw.win.__dshNotifyMe.debug().hostEnvDetected === 'desktop', 'debug() still reports what detection saw');
+  fw.doc.hidden = true; fw.doc.visibilityState = 'hidden';
+  fwHost.setList({
+    ids: ['s1', 's2'],
+    byId: { s1: { displayTitle: '当前会话', retainedBy: { mainView: 1 } }, s2: { displayTitle: '后台任务', retainedBy: {} } },
+    phase: 'ready',
+  });
+  fwHost.notifyList();
+  fwHost.setStatus(new Map([['s2', statusRow(question('question:403', { sessionId: 's2' }))]]));
+  fwHost.notifyStatus();
+  const fwNote = fw.lastNotification();
+  assert(fwNote && typeof fwNote.onclick === 'function', 'the forced-web toast body click is wired');
+  fwNote.onclick();
+  await sleep(20);
+  assert(forcedWeb.length === 0, 'forced web fires no deep link on a desktop page');
+  for (const c of [...fwHost.cleanups]) c();
+
+  const forcedDesk = [];
+  const fd = bootBundle({
+    withNotification: true,
+    extend(sandbox) {
+      sandbox.location = { origin: 'http://127.0.0.1:3080', protocol: 'http:' };
+      sandbox.document.body = { appendChild(node) { forcedDesk.push(node); return node; }, removeChild() {} };
+      sandbox.document.createElement = () => ({ style: {}, setAttribute() {}, parentNode: sandbox.document.body });
+    },
+  });
+  const fdHost = buildHost({ withSessionStatus: true, withWorkspace: true });
+  fd.mod.apply(fdHost.ctx);
+  await sleep(20);
+  fd.win.__dshNotifyMe.setConfig({ hostEnv: 'desktop' });
+  assert(fd.win.__dshNotifyMe.debug().desktop === true, 'forcing desktop overrides web detection');
+  assert(fd.win.__dshNotifyMe.debug().raiseChannel === 'dsh-deeplink', 'forced desktop uses the deep-link channel');
+  fd.doc.hidden = true; fd.doc.visibilityState = 'hidden';
+  fdHost.setList({
+    ids: ['s1', 's2'],
+    byId: { s1: { displayTitle: '当前会话', retainedBy: { mainView: 1 } }, s2: { displayTitle: '后台任务', retainedBy: {} } },
+    phase: 'ready',
+  });
+  fdHost.notifyList();
+  fdHost.setStatus(new Map([['s2', statusRow(question('question:404', { sessionId: 's2' }))]]));
+  fdHost.notifyStatus();
+  const fdNote = fd.lastNotification();
+  assert(fdNote && typeof fdNote.onclick === 'function', 'the forced-desktop toast body click is wired');
+  fdNote.onclick();
+  await sleep(20);
+  assert(forcedDesk.length === 1 && forcedDesk[0].src === 'dsh://open',
+    'forced desktop fires the deep link on a web origin, got ' + JSON.stringify(forcedDesk.map((f) => f.src)));
+  for (const c of [...fdHost.cleanups]) c();
+  console.log('desktop raise channel OK: dsh://open fired on desktop, none in the browser, hostEnv overrides both ways');
+}
+
 (async () => {
   await legacyHost();
   await currentHost();
@@ -1493,6 +1648,7 @@ async function subagentSessions() {
   await subagentSessions();
   await completionUnreadChannel();
   await quickActionsHost();
+  await desktopRaiseChannel();
   console.log('\nALL SMOKE TESTS PASSED ✔');
   // Exit explicitly: marker-release timers stay armed on purpose (they mirror
   // browser behaviour) and would otherwise hold the loop open.
