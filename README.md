@@ -60,7 +60,8 @@ dsh-notify-me 把「监督」和「守在屏幕前」解耦：只在真的出现
 - **点击通知回到对应对话**（默认开）：点通知把 DSH 带到前台并切到提醒所属的对话；多个 DSH 标签页同时开着时，一次点击只调起一个窗口（优先当前可见的那个）并只切它的对话，其余标签页不动；关掉后点通知不做任何事。桌面端（DSH Desktop）同样会把窗口带到前台并切对话：页面侧的 `window.focus()` 在 Electron 里抬不动原生窗口，1.5.2 起改走应用自己的 `dsh://open` 深链调窗（窗口隐藏在托盘里也能被抬回来）；
 - **审批通知上直接裁决**（默认开）：权限审批的通知上带「同意 / 拒绝」按钮，点一下就按审批卡片的「允许一次 / 拒绝」直接裁决，不用切回页面；点通知正文仍是原来的「切回对应对话」。**桌面端暂不支持按钮**（`dsh-app://` 页面无法注册 Service Worker），审批通知自动退回无按钮样式，设置页会明示这一限制；
 - **通知语言**：跟随界面 / 简体中文 / English——决定通知文字与 `🔔 …` 标题标记使用的语言；
-- **测试按钮**：用当前设置立即发一条「需要你」「回复完成」或「审批按钮」测试提醒（**不受**上面「页面打开时也提醒」开关限制；「需要你」测试的标题标记约 6 秒后自动消失）。
+- **测试按钮**：用当前设置立即发一条「需要你」「回复完成」或「审批按钮」测试提醒（**不受**上面「页面打开时也提醒」开关限制；「需要你」测试的标题标记约 6 秒后自动消失）；
+- **版本信息**：设置页底部常显当前插件版本号（`dsh-notify-me v…`）——报障、核对是否装上新版本时直接照抄这一行。
 
 > 需要浏览器通知权限：页面上点一下 → 允许；或地址栏锁 → 站点设置 → 通知 → 允许 → 刷新。macOS 还要在 系统设置 → 通知 里允许该浏览器。
 
@@ -148,6 +149,8 @@ window.__dshNotifyMe.decide("approval:3", "allowed-once")  // 程序化裁决：
 
 DSH Desktop 是一层 Electron 壳，页面跑在 `dsh-app://app` 下：DOM 的 `window.focus()` 只动浏览器窗口对象、碰不到原生窗口，壳的 `will-navigate` / `window-open` 又把页面里发 `dsh://` 的常规出口全堵上了——所以 1.5.1 及以前点通知只在后台切好对话，窗口不上前台。1.5.2 起点通知正文时页面发一条隐藏 iframe 导航到 `dsh://open`：子框架导航不经过壳的 `will-navigate` 拦截，URL 交给系统协议注册，应用的单实例锁收到第二次启动后走 `focusPrimaryWindow()`（restore + show + focus）——与登录完成页把客户端置前是同一条路。窗口隐藏在托盘、被别的窗口压住、最小化，都能被抬回来。浏览器端不受影响，仍走 `window.focus()` / worker `client.focus()`。
 
+真实壳已实测（DSH Desktop 0.2.0-rc.2，issue #9 三轮复测）：点通知 = 抬窗 + 切会话一步到位，跨会话、窗口在后台时同样稳定。触发时机是这条链路的关键：深链必须在**带用户手势的处理器**里发——通知的 `onclick` 自带手势，所以产品路径通；而无手势的脚本化注入（如 CDP evaluate 手工塞 iframe）会被 Chromium 静默丢弃、外部协议根本不回流，复现时看起来就像「通道被拦死」。
+
 ## 已知限制
 
 - 页面必须开着才会提醒（后台标签/最小化可以；关标签页即失效——浏览器层方案固有限制）。
@@ -175,10 +178,11 @@ npm pack --dry-run               # 预览发布包
 
 ## 致谢与贡献须知
 
-贡献者（按 handle 列出，对应 PR 就是他们提的改动）：
+贡献者（按 handle 列出，链接指向他们参与的 PR / issue）：
 
 - [@AgMahone](https://github.com/AgMahone) — [#7](https://github.com/chromoany/dsh-notify-me/pull/7)：0.1.6+ / 0.2.0 宿主代际支持，以及通知双响、cordis 查找路径的报障与复测；
-- [@d0ublecl1ck](https://github.com/d0ublecl1ck) — [#8](https://github.com/chromoany/dsh-notify-me/pull/8)：子代理会话静音（`ignoreSubagent`）与配套测试、文档；1.4.0 里「只静音后台子代理、当前打开的照常提醒」的口径同样出自他在 #8 讨论里的建议，落地由维护者完成。
+- [@d0ublecl1ck](https://github.com/d0ublecl1ck) — [#8](https://github.com/chromoany/dsh-notify-me/pull/8)：子代理会话静音（`ignoreSubagent`）与配套测试、文档；1.4.0 里「只静音后台子代理、当前打开的照常提醒」的口径同样出自他在 #8 讨论里的建议，落地由维护者完成；
+- [@EliteOtaku](https://github.com/EliteOtaku) — [#9](https://github.com/chromoany/dsh-notify-me/issues/9)：桌面端抬窗链路（1.5.2）的逐层排查与真实壳三轮复测——确认点通知抬窗 + 切会话稳定生效，并定位出「无用户手势的脚本化注入被 Chromium 静默丢弃」这一复现差异，纠正了最初「沙箱拦死」的判断。
 
 署名口径：本仓库收编外部 PR 时以维护者提交落地——不沿用原 commit、不挂 Co-authored-by，GitHub 的 contributors 图只显示维护者，贡献者以上面的致谢署名。
 

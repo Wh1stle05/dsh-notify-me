@@ -60,7 +60,8 @@ Open **Settings → Notify me** (refresh the page once after installing):
 - **Click a toast to open that conversation** (default on): clicking brings DSH to the front and switches to the conversation the alert came from. With several DSH tabs open, one click raises exactly one window (a visible one first) and switches only that one — the others stay put; when off, clicking a toast does nothing. On the Desktop (DSH Desktop) the click likewise raises the window and switches conversations: page-side `window.focus()` cannot raise a native Electron window, so since 1.5.2 the plugin rides the app's own `dsh://open` deep link instead (a window hidden to the tray comes back too);
 - **Decide approvals from the toast** (default on): approval notifications carry Approve / Reject buttons, and one click settles the request exactly like the Allow once / Reject buttons on the approval card. Clicking the toast body still takes you back to the conversation. **Buttons are unavailable on the Desktop** (`dsh-app://` pages cannot register a Service Worker): approval toasts fall back to their buttonless form there, and the settings page says so;
 - **Notification language** — follow the interface / 简体中文 / English: controls the language of the alert text and the `🔔 …` title marker;
-- **Test buttons** — send one "needs you", "reply finished" or "approval buttons" test alert with the current settings (**not** limited by the "while the page is open" toggles; the "needs you" test's title marker clears itself after ~6s).
+- **Test buttons** — send one "needs you", "reply finished" or "approval buttons" test alert with the current settings (**not** limited by the "while the page is open" toggles; the "needs you" test's title marker clears itself after ~6s);
+- **Version info** — the settings page always shows the installed plugin version at its foot (`dsh-notify-me v…`); quote that line in bug reports or to check which build you are on.
 
 > Notification permission is required: click once on the page → **Allow** (or address-bar lock → Site settings → Notifications → Allow → reload). On macOS, also allow the browser under System Settings → Notifications.
 
@@ -152,6 +153,8 @@ Every button toast is booked against its interaction key, so it can only decide 
 
 DSH Desktop is a thin Electron shell and its page lives under `dsh-app://app`: DOM `window.focus()` only touches the browsing-context window, never the native one, and the shell's `will-navigate` / window-open handlers block every ordinary way for the page to fire a `dsh://` URL — so through 1.5.1 a toast click switched the conversation in the background but never brought the window forward. Since 1.5.2 a body click navigates a hidden iframe to `dsh://open`: subframe navigations pass the shell's `will-navigate` interception, the URL reaches the OS protocol registration, and the app's single-instance owner runs its own `focusPrimaryWindow()` (restore + show + focus) — the same path the login completion page uses to bring the client forward. A window hidden to the tray, buried under others, or minimized all come back. Browsers are unaffected and still use `window.focus()` / the worker's `client.focus()`.
 
+Verified on the real shell (DSH Desktop 0.2.0-rc.2, three rounds of retesting in issue #9): a toast click raises the window and switches the conversation in one step, stable across sessions and with the window in the background. Timing of the fire is what makes the chain work: the deep link must be launched from a **user-gesture handler** — the notification's `onclick` carries one, which is why the product path works — while gesture-less scripted injection (an iframe appended from a CDP evaluate, say) is silently dropped by Chromium and the external protocol never launches, which looks exactly like the channel being blocked.
+
 ## Known limitations
 
 - The page must be open for alerts to fire (background tab / minimized is fine; closing the tab stops it — that's inherent to a browser-layer plugin).
@@ -179,10 +182,11 @@ npm pack --dry-run               # preview the published tarball
 
 ## Credits & how contributions land
 
-Contributors (by handle; the linked PR is their change):
+Contributors (by handle; the link points at the PR / issue they worked on):
 
 - [@AgMahone](https://github.com/AgMahone) — [#7](https://github.com/chromoany/dsh-notify-me/pull/7): the 0.1.6+ / 0.2.0 host-generation support, plus the double-chime and cordis-lookup reports and retesting;
-- [@d0ublecl1ck](https://github.com/d0ublecl1ck) — [#8](https://github.com/chromoany/dsh-notify-me/pull/8): muting subagent sessions (`ignoreSubagent`) with its tests and docs; the 1.4.0 refinement — mute only background subagents, alert as usual for the one you have open — is his suggestion from the #8 discussion, landed by the maintainer.
+- [@d0ublecl1ck](https://github.com/d0ublecl1ck) — [#8](https://github.com/chromoany/dsh-notify-me/pull/8): muting subagent sessions (`ignoreSubagent`) with its tests and docs; the 1.4.0 refinement — mute only background subagents, alert as usual for the one you have open — is his suggestion from the #8 discussion, landed by the maintainer;
+- [@EliteOtaku](https://github.com/EliteOtaku) — [#9](https://github.com/chromoany/dsh-notify-me/issues/9): the layer-by-layer investigation and three rounds of real-shell retesting of the desktop raise path (1.5.2) — confirming that a toast click raises the window and switches conversations reliably, and pinning down the reproduction difference ("gesture-less scripted injection is silently dropped by Chromium"), which corrected the initial "the sandbox blocks it" reading.
 
 Attribution policy: external PRs are landed as maintainer commits — the original commit is not reused and no Co-authored-by trailer is added, so GitHub's contributors graph lists the maintainer only and contributors are credited above.
 

@@ -2,6 +2,19 @@
 
 All notable changes to **dsh-notify-me** are documented here.
 
+## [1.5.3] — 2026-10-04
+
+### 新增
+- **设置页底部常显插件版本号**（`dsh-notify-me v…`，中英跟随界面语言）：报障、核对是否装上新版本时直接照抄这一行，不必再开控制台查 `window.__dshNotifyMe.version`（该字段保留）。
+
+### 变更
+- 版本号 1.5.2 → 1.5.3；`window.__dshNotifyMe.version` 同步。
+- README（中英）：「桌面端怎么抬窗的 / How the Desktop window gets raised」补真实壳复测结论与触发时机口径——深链必须在带用户手势的处理器里发（通知 `onclick` 自带手势，产品路径通）；无手势的脚本化注入会被 Chromium 静默丢弃、外部协议不回流，复现时看似「通道被拦死」。致谢名单新增 [@EliteOtaku](https://github.com/EliteOtaku)（issue #9 的逐层排查与三轮真实壳复测）。
+
+### 核实
+- issue #9 真实壳三轮复测（DSH Desktop 0.2.0-rc.2 / Windows 11）：点通知 = 抬窗 + 切会话一步到位，同会话、跨会话、窗口在后台均稳定 ✅，1.5.2 的抬窗修复确认生效。
+- 修正 1.5.2 发布当天「CDP 注入 iframe 导航 0 新进程 ⇒ 沙箱 renderer 拦截外部协议」的判断：从发行包 `lib/main.js` 逐处核对，壳对主窗口既没有 `will-frame-navigate` 拦截、页面无 CSP，非 media 权限（含 `openExternal`）一律放行；真实差异在**用户手势上下文**，与渲染进程的 OS 沙箱无关（OS 沙箱 ≠ iframe 的 `sandbox` 属性，GHSA-p2rr-rvmm-c5fp 只影响后者）。
+
 ## [1.5.2] — 2026-10-04
 
 ### 新增
