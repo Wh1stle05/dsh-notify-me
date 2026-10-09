@@ -1778,15 +1778,25 @@ async function soundSources() {
 }
 
 // ── settings page: the new rows actually render ───────────────────────────
+// Hook state is kept per index and survives re-renders, the way React keeps it,
+// so a case can press a control and then read the copy the press produced.
 function makeFakeReact() {
+  const hooks = [];
+  let cursor = 0;
   return {
     createElement(type, props) {
       const children = [];
       for (let i = 2; i < arguments.length; i++) children.push(arguments[i]);
       return { type, props: props || {}, children };
     },
-    useState(init) { return [typeof init === 'function' ? init() : init, () => {}]; },
+    useState(init) {
+      const i = cursor++;
+      if (!(i in hooks)) hooks[i] = typeof init === 'function' ? init() : init;
+      return [hooks[i], (n) => { hooks[i] = (typeof n === 'function') ? n(hooks[i]) : n; }];
+    },
     useSyncExternalStore() { return { active: 'zh' }; },
+    // test-only: rewind the hook cursor for the next render pass
+    __beforeRender() { cursor = 0; },
   };
 }
 function collectText(node, out) {
@@ -1803,13 +1813,21 @@ function settingsSoundRows() {
 
   // boot() renders the Settings page once and returns the flattened text of the
   // tree plus the tree itself, so a case can assert both copy and node shape.
-  function boot(seedConfig, seedSound) {
+  // `opts` adds the toast/audio stands-ins a button-driving case needs.
+  function boot(seedConfig, seedSound, opts) {
     const registered = [];
     const injected = [];
+    const fakeReact = makeFakeReact();
     let dict = null;
+    const audio = makeAudioCapture();
     const b = bootBundle({
-      require: (name) => (name === 'react' ? makeFakeReact() : {}),
-      extend(sandbox) {
+      withNotification: !!(opts && opts.withNotification),
+      require: (name) => (name === 'react' ? fakeReact : {}),
+      extend(sandbox, windowStub) {
+        if (opts && opts.withAudio) {
+          windowStub.AudioContext = audio.FakeAudioContext;
+          sandbox.Audio = makeAudioElementCapture().FakeAudio;
+        }
         if (seedConfig) sandbox.localStorage.setItem('dshNotifyMe.config', JSON.stringify(seedConfig));
         if (seedSound) sandbox.localStorage.setItem('dshNotifyMe.sound.done', JSON.stringify(seedSound));
       },
@@ -1831,9 +1849,37 @@ function settingsSoundRows() {
     assert(injected.indexOf('settings.section') !== -1, 'settings.section was injected');
     const reg = registered.find((r) => r.spec && r.spec.id === 'dsh-notify-me');
     assert(reg, 'the settings section registered');
-    const el = reg.comp({});
-    const tree = el.type(el.props);
-    return { text: collectText(tree).join(' | '), tree, cleanup: () => { for (const c of [...host.cleanups]) c(); } };
+    let tree = null;
+    const render = () => {
+      fakeReact.__beforeRender();
+      const el = reg.comp({});
+      tree = el.type(el.props);
+      return tree;
+    };
+    tree = render();
+    const walk = (node, fn) => {
+      if (!node || typeof node !== 'object') return;
+      if (Array.isArray(node)) { for (const n of node) walk(n, fn); return; }
+      fn(node);
+      if (node.children) for (const c of node.children) walk(c, fn);
+    };
+    return {
+      text: collectText(tree).join(' | '),
+      tree,
+      audio,
+      lastNotification: b.lastNotification,
+      textNow: () => collectText(tree).join(' | '),
+      // Press the exact control the user presses, then re-render the way React
+      // would, so the feedback the press produced is readable.
+      press: (aria) => {
+        let hit = null;
+        walk(tree, (n) => { if (!hit && n.props && n.props['aria-label'] === aria) hit = n; });
+        assert(hit, 'no rendered control labelled ' + aria);
+        hit.props.onClick();
+        render();
+      },
+      cleanup: () => { for (const c of [...host.cleanups]) c(); },
+    };
   }
 
   // 1) defaults: both kinds expose the source selector, no file picker yet.
@@ -1864,7 +1910,18 @@ function settingsSoundRows() {
   assert(empty.text.indexOf('尚未选择文件') !== -1, 'the empty state is spelled out');
   empty.cleanup();
 
-  console.log('settings sound rows OK: both kinds expose the source selector, picker only for custom');
+  // 4) pressing the "system" row's preview must not be a silent no-op: there is
+  //    no plugin cue to play in that mode, so the button has to raise a real,
+  //    un-silenced test alert instead (otherwise it reads as broken).
+  const sys = boot({ soundDone: 'system' }, null, { withNotification: true, withAudio: true });
+  sys.press('试听「回复完成」音效');
+  assert(sys.audio.tones.length === 0, 'the system preview plays no built-in tone');
+  assert(sys.lastNotification(), 'the system preview raised a toast');
+  assert(sys.lastNotification().config.silent === false, 'the system preview toast is un-silenced so the OS chimes');
+  assert(sys.textNow().indexOf('已发一条测试提醒') !== -1, 'the system preview says a test alert was sent');
+  sys.cleanup();
+
+  console.log('settings sound rows OK: both kinds expose the source selector, picker only for custom, system preview fires a toast');
 }
 
 (async () => {
